@@ -94,18 +94,24 @@ def resolve_project_dir(payload: dict) -> Path:
     else:
         directory = Path(payload_cwd) if payload_cwd else Path.cwd()
     directory = Path(os.path.abspath(directory))
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(directory), "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            timeout=2,
-        )
-        top = proc.stdout.decode("utf-8", errors="replace").strip()
-        if proc.returncode == 0 and top:
-            directory = Path(top)
-    except Exception:
-        pass
+    top = _git(directory, "rev-parse", "--show-toplevel")
+    if not top:
+        return directory
+    directory = Path(top)
+    # A linked worktree shares the primary checkout's memory: its git-dir differs from the
+    # common dir (<primary>/.git). In a submodule both are the same path, so it keeps its own.
+    dirs = (_git(directory, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir") or "").splitlines()
+    if len(dirs) == 2 and dirs[0] != dirs[1]:
+        directory = Path(dirs[1]).parent
     return directory
+
+
+def _git(cwd: Path, *args: str) -> str:
+    try:
+        proc = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, timeout=2)
+    except Exception:
+        return ""
+    return proc.stdout.decode("utf-8", errors="replace").strip() if proc.returncode == 0 else ""
 
 
 def memsearch_dir(project_dir: str | os.PathLike[str]) -> Path:

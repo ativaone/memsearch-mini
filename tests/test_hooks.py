@@ -219,6 +219,43 @@ def test_resolve_project_dir_climbs_to_the_git_root(tmp_path):
     assert hooks.resolve_project_dir({"cwd": str(repo / "src" / "deep")}) == repo
 
 
+def _git(cwd, *args):
+    return subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def _commit_something(repo):
+    (repo / "README").write_text("x", encoding="utf-8")
+    _git(repo, "add", "README")
+    _git(repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "init")
+
+
+def test_resolve_project_dir_maps_a_linked_worktree_to_the_primary_checkout(tmp_path):
+    """Upstream #717: one memory per repository, not one per worktree."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _commit_something(repo)
+    worktree = tmp_path / "wt"
+    _git(repo, "worktree", "add", "-q", str(worktree), "-b", "feature")
+
+    assert hooks.resolve_project_dir({"cwd": str(worktree)}) == repo
+    assert hooks.resolve_project_dir({"cwd": str(repo)}) == repo
+
+
+def test_resolve_project_dir_keeps_a_submodule_separate(tmp_path):
+    inner = tmp_path / "inner"
+    inner.mkdir()
+    _git(inner, "init", "-q")
+    _commit_something(inner)
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    _git(outer, "init", "-q")
+    _commit_something(outer)
+    _git(outer, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(inner), "lib")
+
+    assert hooks.resolve_project_dir({"cwd": str(outer / "lib")}) == outer / "lib"
+
+
 def test_memsearch_and_memory_dir(tmp_path, monkeypatch):
     assert hooks.memsearch_dir(tmp_path) == tmp_path / ".memsearch"
     assert hooks.memory_dir(tmp_path) == tmp_path / ".memsearch" / "memory"
