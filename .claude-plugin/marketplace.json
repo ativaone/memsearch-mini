@@ -1,7 +1,7 @@
 {
-  "name": "edgarrc",
+  "name": "ativaone",
   "owner": {
-    "name": "edgarrc"
+    "name": "ativaone"
   },
   "metadata": {
     "description": "Persistent memory plugins for Claude Code and Codex",
@@ -15,10 +15,10 @@
       "description": "Persistent memory for Claude Code — markdown journals indexed in a local SQLite database",
       "category": "productivity",
       "author": {
-        "name": "edgarrc"
+        "name": "ativaone"
       },
-      "homepage": "https://github.com/edgarrc/memsearch-mini",
-      "repository": "https://github.com/edgarrc/memsearch-mini",
+      "homepage": "https://github.com/ativaone/memsearch-mini",
+      "repository": "https://github.com/ativaone/memsearch-mini",
       "license": "MIT",
       "keywords": ["memory", "semantic-search", "sqlite", "markdown"]
     }

@@ -66,8 +66,8 @@ markdown, indexes it locally, and hands the relevant parts back the next time th
 ## Install — Claude Code
 
 ```
-/plugin marketplace add edgarrc/memsearch-mini
-/plugin install memsearch-mini@edgarrc
+/plugin marketplace add ativaone/memsearch-mini
+/plugin install memsearch-mini@ativaone
 ```
 
 The first session prints:
@@ -91,7 +91,7 @@ claude --plugin-dir /path/to/memsearch-mini
 ## Install — Codex
 
 ```bash
-git clone https://github.com/edgarrc/memsearch-mini.git
+git clone https://github.com/ativaone/memsearch-mini.git
 bash memsearch-mini/codex/install.sh
 ```
 
@@ -227,7 +227,7 @@ filename_suffix = ""  # "hostname" writes YYYY-MM-DD-<host>.md, for a memory fol
 ```
 
 Read and write it with the CLI, always through the launcher in the plugin directory (for a
-marketplace install that is under `~/.claude/plugins/marketplaces/edgarrc/`; for Codex it is
+marketplace install that is under `~/.claude/plugins/marketplaces/ativaone/`; for Codex it is
 `<checkout>/bin/memsearch`):
 
 ```bash
@@ -331,8 +331,8 @@ survived an uninstall.
 ### Claude Code
 
 ```
-/plugin uninstall memsearch-mini@edgarrc
-/plugin marketplace remove edgarrc
+/plugin uninstall memsearch-mini@ativaone
+/plugin marketplace remove ativaone
 ```
 
 ### Codex
@@ -365,8 +365,8 @@ Nothing here runs automatically — these are the steps to run on your own machi
 ```
 /plugin uninstall memsearch
 /plugin marketplace remove memsearch-plugins
-/plugin marketplace add edgarrc/memsearch-mini
-/plugin install memsearch-mini@edgarrc
+/plugin marketplace add ativaone/memsearch-mini
+/plugin install memsearch-mini@ativaone
 ```
 
 **Codex** — delete the skills that no longer exist, then reinstall:

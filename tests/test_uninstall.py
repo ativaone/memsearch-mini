@@ -323,8 +323,8 @@ def test_is_idempotent_and_safe_when_nothing_is_installed(uninstaller: Uninstall
 def test_prints_the_claude_code_commands(uninstaller: Uninstaller) -> None:
     result = uninstaller.run()
 
-    assert "/plugin uninstall memsearch-mini@edgarrc" in result.stdout
-    assert "/plugin marketplace remove edgarrc" in result.stdout
+    assert "/plugin uninstall memsearch-mini@ativaone" in result.stdout
+    assert "/plugin marketplace remove ativaone" in result.stdout
 
 
 def test_unknown_argument_is_rejected(uninstaller: Uninstaller) -> None:

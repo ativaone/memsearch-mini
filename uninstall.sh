@@ -124,8 +124,8 @@ else
 fi
 
 echo "[3/4] Claude Code — run these two commands inside Claude Code:"
-echo "    /plugin uninstall memsearch-mini@edgarrc"
-echo "    /plugin marketplace remove edgarrc"
+echo "    /plugin uninstall memsearch-mini@ativaone"
+echo "    /plugin marketplace remove ativaone"
 
 echo "[4/4] Runtime home..."
 if [ -d "$MEMSEARCH_HOME" ]; then
