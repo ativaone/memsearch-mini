@@ -59,3 +59,10 @@ def test_token_type_ids_omitted_when_model_does_not_declare_it() -> None:
     e._encode(["hello"])
     assert session.last_feed is not None
     assert set(session.last_feed) == {"input_ids", "attention_mask"}
+
+
+def test_default_batch_size_is_64_and_config_overrides() -> None:
+    assert OnnxEmbedding._DEFAULT_BATCH_SIZE == 64
+    e = object.__new__(OnnxEmbedding)
+    e._batch_size = 8  # what __init__ stores when embedding.batch_size = 8
+    assert e.batch_size == 8

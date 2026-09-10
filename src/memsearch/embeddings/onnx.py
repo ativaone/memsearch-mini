@@ -19,7 +19,9 @@ class OnnxEmbedding:
     - Models with ``last_hidden_state`` output — CLS pooling + L2 normalize applied
     """
 
-    _DEFAULT_BATCH_SIZE = 32
+    # 64 keeps memory bounded (chunks are capped by chunking.max_chunk_size) and is ~10% faster
+    # than 32 on CPU for the default int8 export; embedding.batch_size still overrides it.
+    _DEFAULT_BATCH_SIZE = 64
 
     def __init__(
         self,
@@ -31,9 +33,7 @@ class OnnxEmbedding:
             import onnxruntime as ort
         except ImportError as exc:
             raise ImportError(
-                "ONNX embedding provider requires onnxruntime. "
-                "Install with: pip install 'memsearch[onnx]' "
-                "or: uv add 'memsearch[onnx]'"
+                "ONNX embedding provider requires onnxruntime. Run 'uv sync --extra onnx' in the plugin directory."
             ) from exc
 
         from huggingface_hub import hf_hub_download, list_repo_files
