@@ -56,5 +56,8 @@ search → expand → transcript. Runtime state lives under `$MEMSEARCH_HOME` (d
 - **Tests isolate `HOME` and never touch `~`.** `conftest.isolated_home` repoints `HOME`,
   `MEMSEARCH_CONFIG` and `TMPDIR` into `tmp_path` and clears the `MEMSEARCH_*` switches; keep it that
   way for any new test.
+- **Upstream fixes arrive through the `upstream-sync` skill** (`.claude/skills/upstream-sync/`): one
+  issue here per ported item, a commit that references it, its closure, and a catalog entry in
+  `.claude/upstream-sync/`. Never merge or cherry-pick from upstream.
 - **Hooks stay import-light.** No `numpy`, `onnxruntime` or `memsearch.store` at module scope in
   `hooks.py` — a SessionStart that pays for an ONNX import blows its 10-second budget.

@@ -403,6 +403,24 @@ instead of the old `[plugins.<agent>.summarize]` block. `prompts.summarize` stil
 session after installing sees no index, builds one in the background, and everything is searchable
 again. Chunk ids changed, but nothing on disk refers to them.
 
+## Upstream sync
+
+Keeping up with [zilliztech/memsearch](https://github.com/zilliztech/memsearch) is part of this
+repository's routine, not an afterthought — but it is done case by case, never as a merge. Every
+upstream issue and pull request is judged against this fork's reduced scope: does the concept
+apply here, and can it be fixed without adding the machinery this fork exists to avoid? What
+applies is ported in this codebase's own terms, with tests. What does not is recorded with the
+reason.
+
+- **Everything up to 2026-09-10 has been reviewed** — 248 upstream issues and pull requests,
+  including the whole open backlog at that date.
+- **Future items are tracked as issues in this repository.** Each port opens an issue here that
+  links the upstream item, states why it applies and what was done, and is closed by the commit
+  that references it. Not every upstream item will apply — most will not — but every one of them
+  is analyzed, and the verdicts live in `.claude/upstream-sync/entries.jsonl`.
+- The routine is the project-local Claude Code skill `upstream-sync` (`.claude/skills/upstream-sync/`),
+  which lists what is still unjudged, records verdicts, and prints a console report of each run.
+
 ## Development
 
 ```bash
