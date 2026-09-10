@@ -143,6 +143,11 @@ class Plugin:
         return self.venv.with_name(self.venv.name + ".log")
 
     @property
+    def root_file(self) -> Path:
+        """Provenance sidecar: which checkout the environment belongs to."""
+        return self.venv.with_name(self.venv.name + ".root")
+
+    @property
     def ms_home(self) -> Path:
         return Path(self.env["MEMSEARCH_MINI_HOME"])
 
@@ -526,6 +531,22 @@ def test_sync_now_reports_failure_and_releases_the_lock(plugin: Plugin) -> None:
     assert "rc=3" in result.stdout
     assert not plugin.venv.with_name(plugin.venv.name + ".lock").exists()
     assert not (plugin.venv / ".memsearch-mini-synced").exists()
+
+
+def test_sync_now_records_the_checkout_that_owns_the_environment(plugin: Plugin) -> None:
+    """The sidecar is what lets a later session tell an orphan from a live environment."""
+    result = plugin.bash("sync_now; echo rc=$?")
+
+    assert "rc=0" in result.stdout
+    assert plugin.root_file.read_text(encoding="utf-8").strip() == str(plugin.root)
+
+
+def test_sync_now_records_the_checkout_even_when_the_sync_fails(plugin: Plugin) -> None:
+    """Provenance is unconditional: a half-built environment is exactly what gets orphaned."""
+    result = plugin.bash("sync_now; echo rc=$?", extra_env={"FAKE_SYNC_RC": "3"})
+
+    assert "rc=3" in result.stdout
+    assert plugin.root_file.read_text(encoding="utf-8").strip() == str(plugin.root)
 
 
 def test_sync_log_never_lands_inside_the_venv(plugin: Plugin) -> None:

@@ -120,6 +120,11 @@ sync_now() {
     rm -rf "$SYNC_LOCK" 2>/dev/null
     mkdir "$SYNC_LOCK" 2>/dev/null || return 1
   fi
+  # Which checkout this environment belongs to, written whether the sync below
+  # succeeds or not: an install path that later disappears — a plugin update
+  # replaces the versioned directory — is what makes the environment collectable
+  # (see _sweep_orphan_venvs). A half-built environment is orphaned just as much.
+  printf '%s\n' "$ROOT" >"$VENV.root" 2>/dev/null
   printf '=== %s uv sync %s ===\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)" "$ROOT" >>"$SYNC_LOG" 2>/dev/null
   uv sync --project "$ROOT" --frozen $(extras_args) >>"$SYNC_LOG" 2>&1 && extras_args >"$SYNC_STAMP"
   rc=$?

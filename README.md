@@ -174,6 +174,13 @@ Under `$MEMSEARCH_MINI_HOME`:
 | `~/.memsearch-mini/models/` | Hugging Face cache (`HF_HOME`) — where the ONNX embedding model lands. |
 | `~/.memsearch-mini/index.log` | Output of every background indexer the hooks spawn (model download, indexing errors). Truncated past 1 MB. |
 
+Environments are keyed by the plugin path, and Claude Code installs every version under a directory
+of its own, so an update builds a new environment and abandons the previous one. `<hash>.root` is
+what makes that recoverable: it records the checkout the environment belongs to, and once that path
+is gone — Claude Code keeps the old version directory for about two weeks — the next SessionStart
+deletes the environment and its sidecars. Environments built before this existed carry no `.root`
+and are never collected; `rm -rf ~/.memsearch-mini/venvs` is always safe, the runtime rebuilds.
+
 If you already export `UV_CACHE_DIR`, `HF_HOME` or `UV_PROJECT_ENVIRONMENT`, your values are kept and
 the plugin uses those instead.
 

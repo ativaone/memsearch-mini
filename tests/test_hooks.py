@@ -39,6 +39,7 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(tempfile, "tempdir", str(scratch))
     for name in (
         "MEMSEARCH_MINI_DIR",
+        "MEMSEARCH_MINI_HOME",  # the orphan sweep deletes directories under it: never the real one
         "CLAUDE_PROJECT_DIR",
         "MEMSEARCH_MINI_DISABLE",
         "MEMSEARCH_MINI_IN_STOP_WORKER",
@@ -848,3 +849,126 @@ def test_recover_skips_a_record_another_worker_claimed(project, tmp_path, monkey
 
     assert record.exists()
     assert list(_memory(project).glob("*.md")) == []
+
+
+# --- orphaned runtime environments --------------------------------------------
+
+
+@pytest.fixture
+def venvs(tmp_path, monkeypatch) -> Path:
+    """A fabricated ``$MEMSEARCH_MINI_HOME/venvs``, pinned so a sweep never reaches the real one."""
+    monkeypatch.setenv("MEMSEARCH_MINI_HOME", str(tmp_path / "ms-home"))
+    directory = config.home_dir() / "venvs"
+    directory.mkdir(parents=True)
+    return directory
+
+
+def _runtime(venvs: Path, stem: str, *, owner: Path | None, built: bool = True) -> Path:
+    """One environment as ``sync_now`` leaves it: the directory plus its sidecars."""
+    if built:
+        (venvs / stem / "bin").mkdir(parents=True)
+        (venvs / stem / "bin" / "memsearch-mini").write_text("#!/bin/sh\n", encoding="utf-8")
+    if owner is not None:
+        (venvs / f"{stem}.root").write_text(f"{owner}\n", encoding="utf-8")
+    (venvs / f"{stem}.log").write_text("=== uv sync ===\n", encoding="utf-8")
+    return venvs / stem
+
+
+def test_sweep_collects_a_runtime_whose_checkout_is_gone(venvs, tmp_path):
+    """A plugin update moves the install path; the environment it left behind is unreachable."""
+    orphan = _runtime(venvs, "aaaaaaaaaaaa", owner=tmp_path / "cache" / "memsearch-mini" / "0.1.0")
+
+    hooks._sweep_orphan_venvs()
+
+    assert not orphan.exists()
+    assert list(venvs.iterdir()) == []  # the .root and .log sidecars go too
+
+
+def test_sweep_keeps_a_runtime_whose_checkout_still_exists(venvs, tmp_path):
+    live = tmp_path / "cache" / "memsearch-mini" / "0.2.0"
+    live.mkdir(parents=True)
+    kept = _runtime(venvs, "bbbbbbbbbbbb", owner=live)
+
+    hooks._sweep_orphan_venvs()
+
+    assert (kept / "bin" / "memsearch-mini").is_file()
+    assert (venvs / "bbbbbbbbbbbb.root").exists()
+    assert (venvs / "bbbbbbbbbbbb.log").exists()
+
+
+def test_sweep_never_touches_a_runtime_without_a_sidecar(venvs):
+    """Environments built before the sidecar existed carry no provenance: leave them alone."""
+    legacy = _runtime(venvs, "cccccccccccc", owner=None)
+
+    hooks._sweep_orphan_venvs()
+
+    assert (legacy / "bin" / "memsearch-mini").is_file()
+    assert (venvs / "cccccccccccc.log").exists()
+
+
+def test_sweep_ignores_a_bare_dot_root_file(venvs, tmp_path):
+    """glob matches ".root" and ``venvs / ""`` is venvs itself: a stray file must
+    never turn the sweep loose on every runtime at once."""
+    (venvs / ".root").write_text(f"{tmp_path / 'gone'}\n", encoding="utf-8")
+    kept = _runtime(venvs, "222222222222", owner=None)
+
+    hooks._sweep_orphan_venvs()
+
+    assert (kept / "bin" / "memsearch-mini").is_file()
+
+
+def test_sweep_defers_to_a_lock_a_sync_may_still_hold(venvs, tmp_path):
+    orphan = _runtime(venvs, "dddddddddddd", owner=tmp_path / "gone")
+    lock = venvs / "dddddddddddd.lock"
+    lock.mkdir()
+
+    hooks._sweep_orphan_venvs()
+
+    assert orphan.is_dir() and lock.is_dir()  # a sync may be in flight
+
+    _age(lock, hooks.VENV_LOCK_STALE_SECONDS + 60)
+    hooks._sweep_orphan_venvs()
+
+    assert not orphan.exists()
+    assert list(venvs.iterdir()) == []  # the stale lock directory goes with it
+
+
+def test_sweep_removes_sidecars_left_without_a_runtime(venvs, tmp_path):
+    """A sync that never produced an environment still left its provenance behind."""
+    _runtime(venvs, "eeeeeeeeeeee", owner=tmp_path / "gone", built=False)
+
+    hooks._sweep_orphan_venvs()
+
+    assert list(venvs.iterdir()) == []
+
+
+def test_sweep_is_a_no_op_without_a_venvs_directory(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMSEARCH_MINI_HOME", str(tmp_path / "ms-home"))
+
+    hooks._sweep_orphan_venvs()
+
+    assert not (tmp_path / "ms-home").exists()  # never raises, never creates
+
+
+def test_session_start_sweeps_orphaned_runtimes(project, spawns, venvs, tmp_path):
+    orphan = _runtime(venvs, "ffffffffffff", owner=tmp_path / "gone")
+    live = tmp_path / "still-installed"
+    live.mkdir()
+    kept = _runtime(venvs, "111111111111", owner=live)
+
+    payload = _json(_invoke(["session-start", "--platform", "claude"]))
+
+    assert payload["systemMessage"].startswith("[memsearch-mini v")
+    assert not orphan.exists()
+    assert (kept / "bin" / "memsearch-mini").is_file()
+
+
+def test_session_start_survives_a_failing_sweep(project, spawns, venvs, monkeypatch):
+    def boom():
+        raise RuntimeError("unreadable venvs directory")
+
+    monkeypatch.setattr(hooks, "_sweep_orphan_venvs", boom)
+
+    payload = _json(_invoke(["session-start", "--platform", "claude"]))
+
+    assert f"memory: {_memory(project)}" in payload["systemMessage"]  # the hook ran to the end

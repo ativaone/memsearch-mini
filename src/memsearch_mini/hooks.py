@@ -13,6 +13,7 @@ import json
 import os
 import re
 import select
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -278,6 +279,54 @@ def _already_journaled(memory: Path, turn_uuid: str, stamp: datetime, suffix: st
         return False
 
 
+# --- orphaned runtime environments --------------------------------------------
+#
+# Environments are keyed by the plugin path (``_venv_id`` in hooks/common.sh) and Claude Code
+# installs the plugin under a versioned directory, so every update builds a fresh ~90 MB
+# environment and abandons the previous one. ``sync_now`` records the owning checkout in
+# ``<venv>.root``; once that path is gone — Claude Code deletes the old version directory about
+# two weeks later — nothing can reach the environment again, so a SessionStart reclaims it.
+# Stdlib only, like the rest of this module: no store, no numpy, no ONNX.
+
+VENV_LOCK_STALE_SECONDS = 1800  # same grace as the stale sync lock in hooks/common.sh
+
+
+def _sweep_orphan_venvs() -> None:
+    """Delete runtime environments whose checkout no longer exists. Best effort, never raises."""
+    venvs = config.home_dir() / "venvs"
+    if not venvs.is_dir():
+        return
+    try:
+        sidecars = sorted(venvs.glob("*.root"))
+    except OSError:
+        return
+    for sidecar in sidecars:
+        stem = sidecar.name[: -len(".root")]
+        if not stem:
+            continue  # glob matches a bare ".root", and `venvs / ""` is venvs itself
+        try:
+            recorded = sidecar.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        owner = recorded[0].strip() if recorded else ""
+        try:
+            if not owner or Path(owner).is_dir():
+                continue  # the checkout is still installed: the environment is in use
+        except (OSError, ValueError):
+            continue
+        lock = venvs / f"{stem}.lock"
+        try:
+            if time.time() - lock.stat().st_mtime < VENV_LOCK_STALE_SECONDS:
+                continue  # a sync may be in flight; only a stale lock means nobody is there
+        except OSError:
+            pass  # no lock at all
+        shutil.rmtree(venvs / stem, ignore_errors=True)
+        shutil.rmtree(lock, ignore_errors=True)  # the lock is a directory: `mkdir` is the lock
+        for path in (sidecar, venvs / f"{stem}.log"):
+            with contextlib.suppress(OSError):
+                path.unlink()
+
+
 def _index_state(db_path: Path, memory: Path) -> tuple[str, bool]:
     """(status fragment, reindex needed), read from the derived index with sqlite3."""
     count: int | None = None
@@ -469,6 +518,10 @@ def session_start(platform: str) -> None:
     status += f" | index: {index_status} | memory: {memory}"
     if stale:
         _spawn_detached(_index_argv(memory), project_dir, _reindex_env())
+    try:
+        _sweep_orphan_venvs()  # inline: a few stat calls, then an rmtree only when one is orphaned
+    except Exception:
+        traceback.print_exc(file=sys.stderr)
     pending = _sweep_pending(project_dir)
     if pending:
         status += f" | {pending}"
