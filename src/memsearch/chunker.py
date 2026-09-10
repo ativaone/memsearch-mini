@@ -18,9 +18,8 @@ def clean_content_for_embedding(text: str) -> str:
     """Strip metadata noise from chunk content before embedding.
 
     Removes HTML comments (<!-- ... -->), which often contain session/turn
-    UUIDs and transcript paths that dilute embedding quality.  The original
-    content stored in Milvus is unchanged — this only affects the text
-    sent to the embedding model.
+    UUIDs and transcript paths that dilute embedding quality.  The stored
+    content is unchanged — this only affects the text sent to the model.
     """
     cleaned = _HTML_COMMENT_RE.sub("", text)
     # Collapse runs of blank lines left behind by removed comments
@@ -62,18 +61,13 @@ class Chunk:
             object.__setattr__(self, "content_hash", h)
 
 
-def compute_chunk_id(
-    source: str,
-    start_line: int,
-    end_line: int,
-    content_hash: str,
-    model: str,
-) -> str:
-    """Compute a composite chunk ID matching OpenClaw's format.
+def compute_chunk_id(source: str, start_line: int, end_line: int, content_hash: str) -> str:
+    """Stable identity of a chunk: ``sha256("markdown:<source>:<start>:<end>:<hash>")[:16]``.
 
-    ``hash(source:path:startLine:endLine:contentHash:model)``
+    The embedding model is deliberately *not* part of it — ``meta`` tracks the
+    model, and changing it rebuilds the index instead of doubling every row.
     """
-    raw = f"markdown:{source}:{start_line}:{end_line}:{content_hash}:{model}"
+    raw = f"markdown:{source}:{start_line}:{end_line}:{content_hash}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 

@@ -1,167 +1,77 @@
-"""Tests for the file scanner."""
+"""Tests for the markdown file scanner."""
+
+from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
-from memsearch.scanner import scan_paths, should_index_path
+from memsearch.scanner import ScannedFile, read_utf8_text_replace, scan_paths
 
 
-def test_scan_finds_markdown_files(tmp_path: Path):
+def test_scan_finds_markdown_files_recursively(tmp_path: Path):
     (tmp_path / "a.md").write_text("# A")
     (tmp_path / "b.markdown").write_text("# B")
     (tmp_path / "c.txt").write_text("not markdown")
-    sub = tmp_path / "sub"
-    sub.mkdir()
-    (sub / "d.md").write_text("# D")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "d.MD").write_text("# D")
 
     results = scan_paths([tmp_path])
-    paths = {r.path.name for r in results}
-    assert "a.md" in paths
-    assert "b.markdown" in paths
-    assert "d.md" in paths
-    assert "c.txt" not in paths
+    assert [r.path.name for r in results] == ["a.md", "b.markdown", "d.MD"]
+    assert all(isinstance(r, ScannedFile) and r.size > 0 and r.mtime > 0 for r in results)
 
 
-def test_scan_ignores_hidden(tmp_path: Path):
-    hidden_dir = tmp_path / ".hidden"
-    hidden_dir.mkdir()
-    (hidden_dir / "secret.md").write_text("# secret")
+def test_scan_ignores_hidden_files_and_directories(tmp_path: Path):
+    (tmp_path / ".hidden").mkdir()
+    (tmp_path / ".hidden" / "secret.md").write_text("# secret")
     (tmp_path / ".dotfile.md").write_text("# dot")
     (tmp_path / "visible.md").write_text("# visible")
 
-    results = scan_paths([tmp_path], ignore_hidden=True)
-    paths = {r.path.name for r in results}
-    assert "visible.md" in paths
-    assert "secret.md" not in paths
-    assert ".dotfile.md" not in paths
+    assert [r.path.name for r in scan_paths([tmp_path])] == ["visible.md"]
 
 
-def test_scan_includes_hidden_when_not_ignored(tmp_path: Path):
-    hidden_dir = tmp_path / ".hidden"
-    hidden_dir.mkdir()
-    (hidden_dir / "secret.md").write_text("# secret")
+def test_scan_includes_hidden_entries_when_asked(tmp_path: Path):
+    (tmp_path / ".hidden").mkdir()
+    (tmp_path / ".hidden" / "secret.md").write_text("# secret")
     (tmp_path / ".dotfile.md").write_text("# dot")
 
-    results = scan_paths([tmp_path], ignore_hidden=False)
-    paths = {r.path.name for r in results}
-
-    assert "secret.md" in paths
-    assert ".dotfile.md" in paths
+    names = {r.path.name for r in scan_paths([tmp_path], ignore_hidden=False)}
+    assert names == {"secret.md", ".dotfile.md"}
 
 
-def test_scan_single_file(tmp_path: Path):
-    f = tmp_path / "single.md"
-    f.write_text("# Single")
-    results = scan_paths([f])
-    assert len(results) == 1
-    assert results[0].path.name == "single.md"
+def test_scan_accepts_explicit_files_and_custom_extensions(tmp_path: Path):
+    note = tmp_path / "single.md"
+    note.write_text("# Single")
+    text = tmp_path / "notes.txt"
+    text.write_text("plain")
+
+    assert [r.path for r in scan_paths([note])] == [note]
+    assert scan_paths([text]) == []
+    assert [r.path for r in scan_paths([text], extensions=(".txt",))] == [text]
 
 
-def test_scan_deduplicates(tmp_path: Path):
-    f = tmp_path / "dup.md"
-    f.write_text("# Dup")
-    results = scan_paths([f, f, tmp_path])
-    names = [r.path.name for r in results]
-    assert names.count("dup.md") == 1
+def test_scan_deduplicates_and_sorts(tmp_path: Path):
+    (tmp_path / "b.md").write_text("# B")
+    (tmp_path / "a.md").write_text("# A")
+
+    results = scan_paths([tmp_path / "b.md", tmp_path, tmp_path / "b.md"])
+    assert [r.path.name for r in results] == ["a.md", "b.md"]
 
 
-def test_ignore_support_is_disabled_by_default(tmp_path: Path):
-    (tmp_path / ".gitignore").write_text("ignored.md\n")
-    ignored = tmp_path / "ignored.md"
-    ignored.write_text("# Still indexed")
-
-    results = scan_paths([tmp_path])
-
-    assert [result.path for result in results] == [ignored]
+def test_scan_skips_paths_that_do_not_exist(tmp_path: Path):
+    assert scan_paths([tmp_path / "nowhere", tmp_path / "nowhere.md"]) == []
+    assert scan_paths([]) == []
 
 
-def test_scan_applies_gitignore_rules_when_explicitly_enabled(tmp_path: Path):
-    (tmp_path / ".gitignore").write_text("ignored.md\n")
-    ignored = tmp_path / "ignored.md"
-    included = tmp_path / "included.md"
-    ignored.write_text("# Ignored")
-    included.write_text("# Included")
-
-    results = scan_paths([tmp_path], ignore_files=[".gitignore"])
-
-    assert [result.path for result in results] == [included]
+def test_read_utf8_text_replace_survives_bad_bytes_and_nuls(tmp_path: Path):
+    path = tmp_path / "broken.md"
+    path.write_bytes(b"caf\xe9 \x00 done\n")
+    text = read_utf8_text_replace(path)
+    assert "\x00" not in text
+    assert text.startswith("caf")
+    assert text.endswith(" done\n")
+    assert "�" in text
 
 
-def test_scan_never_discovers_ignore_files_from_parent_directory(tmp_path: Path):
-    memory = tmp_path / ".memsearch" / "memory"
-    memory.mkdir(parents=True)
-    note = memory / "note.md"
-    note.write_text("# Note")
-    (tmp_path / ".gitignore").write_text(".memsearch/memory/note.md\n")
-
-    results = scan_paths([memory], ignore_files=[".gitignore"])
-
-    assert [result.path for result in results] == [note]
-
-
-def test_scan_applies_nested_ignore_files_and_negation(tmp_path: Path):
-    docs = tmp_path / "docs"
-    docs.mkdir()
-    (tmp_path / ".gitignore").write_text("*.draft.md\n")
-    (docs / ".gitignore").write_text("private.md\n!keep.draft.md\n")
-    public = docs / "public.md"
-    private = docs / "private.md"
-    kept = docs / "keep.draft.md"
-    public.write_text("# Public")
-    private.write_text("# Private")
-    kept.write_text("# Kept")
-
-    results = scan_paths([tmp_path], ignore_files=[".gitignore"])
-
-    assert {result.path for result in results} == {public, kept}
-
-
-def test_scan_combines_ignore_files_then_explicit_excludes(tmp_path: Path):
-    (tmp_path / ".gitignore").write_text("from-git.md\n")
-    (tmp_path / ".cursorignore").write_text("from-cursor.md\n!from-git.md\n")
-    from_git = tmp_path / "from-git.md"
-    from_cursor = tmp_path / "from-cursor.md"
-    final_exclude = tmp_path / "final.md"
-    from_git.write_text("# Git")
-    from_cursor.write_text("# Cursor")
-    final_exclude.write_text("# Final")
-
-    results = scan_paths(
-        [tmp_path],
-        ignore_files=[".gitignore", ".cursorignore"],
-        exclude=["final.md"],
-    )
-
-    assert [result.path for result in results] == [from_git]
-
-
-def test_explicit_file_path_bypasses_ignore_rules(tmp_path: Path):
-    ignored = tmp_path / "ignored.md"
-    ignored.write_text("# Explicit")
-    (tmp_path / ".gitignore").write_text("ignored.md\n")
-
-    results = scan_paths([ignored], ignore_files=[".gitignore"])
-
-    assert [result.path for result in results] == [ignored]
-
-
-def test_should_index_path_matches_directory_scan_behavior(tmp_path: Path):
-    (tmp_path / ".gitignore").write_text("ignored/\n")
-    ignored = tmp_path / "ignored" / "note.md"
-    included = tmp_path / "included.md"
-    hidden = tmp_path / ".hidden" / "note.md"
-    ignored.parent.mkdir()
-    hidden.parent.mkdir()
-    ignored.write_text("# Ignored")
-    included.write_text("# Included")
-    hidden.write_text("# Hidden")
-
-    assert not should_index_path(ignored, [tmp_path], ignore_files=[".gitignore"])
-    assert should_index_path(included, [tmp_path], ignore_files=[".gitignore"])
-    assert not should_index_path(hidden, [tmp_path], ignore_files=[".gitignore"])
-
-
-def test_ignore_file_names_cannot_escape_index_root(tmp_path: Path):
-    with pytest.raises(ValueError, match="without directory components"):
-        scan_paths([tmp_path], ignore_files=["../.gitignore"])
+def test_read_utf8_text_replace_keeps_valid_text_intact(tmp_path: Path):
+    path = tmp_path / "ok.md"
+    path.write_text("# 北京\n\n- é ok\n", encoding="utf-8")
+    assert read_utf8_text_replace(path) == "# 北京\n\n- é ok\n"

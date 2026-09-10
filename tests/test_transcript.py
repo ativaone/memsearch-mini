@@ -1,106 +1,154 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
-# transcript.py was moved from memsearch core to the Claude Code plugin directory
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "plugins" / "claude-code"))
+import pytest
 
-from transcript import (
-    _extract_time,
-    _strip_hook_tags,
-    _summarize_tool_input,
-    find_turn_context,
-    format_turn_index,
-    parse_transcript,
-)
+from memsearch import transcript as tr
 
 
-def test_parse_transcript_skips_invalid_and_tool_result(tmp_path: Path) -> None:
-    transcript = tmp_path / "sample.jsonl"
-    transcript.write_text(
-        "\n".join(
-            [
-                "{not valid json",
-                json.dumps(
-                    {
-                        "type": "user",
-                        "uuid": "u1",
-                        "timestamp": "2026-03-07T05:00:00Z",
-                        "message": {"content": [{"type": "tool_result", "content": "ok"}]},
-                    }
-                ),
-                json.dumps(
-                    {
-                        "type": "user",
-                        "uuid": "u2",
-                        "timestamp": "2026-03-07T05:00:01Z",
-                        "message": {"content": "<system-reminder>ignore</system-reminder>Hello"},
-                    }
-                ),
-                json.dumps(
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [
-                                {"type": "text", "text": "World"},
-                                {"type": "tool_use", "name": "Bash", "input": {"command": "ls -la"}},
-                            ]
-                        },
-                    }
-                ),
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    turns = parse_transcript(transcript)
-
-    assert len(turns) == 1
-    assert turns[0].uuid == "u2"
-    assert "Hello" in turns[0].content
-    assert "Assistant" in turns[0].content
-    assert turns[0].tool_calls == ["Bash(ls -la)"]
+def _write(path: Path, rows: list[dict]) -> Path:
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    return path
 
 
-def test_find_turn_context_supports_uuid_prefix() -> None:
-    turns = [
-        type("T", (), {"uuid": "aaaabbbb-1"})(),
-        type("T", (), {"uuid": "ccccdddd-2"})(),
-        type("T", (), {"uuid": "eeeeffff-3"})(),
-    ]
-
-    context, idx = find_turn_context(turns, "ccccdddd", context=1)
-
-    assert len(context) == 3
-    assert idx == 1
-
-
-def test_helpers_format_and_summarize() -> None:
-    assert _strip_hook_tags("<command-x>rm</command-x>keep") == "keep"
-    assert _extract_time("2026-03-07T05:10:11.123Z") == "05:10:11"
-    assert _summarize_tool_input("Read", {"file_path": "a.md"}) == "Read(a.md)"
-    assert _summarize_tool_input("Unknown", {"k": "v"}) == "Unknown(k=v)"
-
-
-def test_format_turn_index_includes_tool_count() -> None:
-    turns = [
-        type(
-            "T",
-            (),
+def test_claude_format_extracts_tool_command_and_output(tmp_path: Path) -> None:
+    p = _write(
+        tmp_path / "c.jsonl",
+        [
+            {"type": "user", "uuid": "u1", "message": {"content": "run the tests"}},
             {
-                "uuid": "12345678-abcd",
-                "timestamp": "2026-03-07T05:10:11Z",
-                "content": "line1\nline2",
-                "tool_calls": ["Read(a.md)", "Edit(a.md)"],
+                "type": "assistant",
+                "uuid": "a1",
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "Running them"},
+                        {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "pytest -x --ff tests/"}},
+                    ]
+                },
             },
-        )(),
-    ]
+            {
+                "type": "user",
+                "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "5 passed"}]},
+            },
+        ],
+    )
+    assert tr.detect_format(tr._load_jsonl(p)) == "claude"
+    turns = tr.parse_transcript(p)
+    assert [t.role for t in turns] == ["user", "assistant"]
+    tc = turns[1].tools[0]
+    assert tc.command == "pytest -x --ff tests/"  # full command, not truncated
+    assert "5 passed" in tc.output
 
-    output = format_turn_index(turns)
 
-    assert "12345678-abcd"[:12] in output
-    assert "05:10:11" in output
-    assert "line1 line2" in output
-    assert "[2 tools]" in output
+def test_codex_rollout_extracts_function_call(tmp_path: Path) -> None:
+    p = _write(
+        tmp_path / "r.jsonl",
+        [
+            {"type": "event_msg", "payload": {"type": "user_message", "message": "deploy to staging"}},
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "shell",
+                    "call_id": "c1",
+                    "arguments": json.dumps({"command": ["bash", "-lc", "make build-fast && kubectl apply -f k8s/"]}),
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {"type": "function_call_output", "call_id": "c1", "output": "deployed"},
+            },
+            {"type": "event_msg", "payload": {"type": "agent_message", "message": "done"}},
+        ],
+    )
+    assert tr.detect_format(tr._load_jsonl(p)) == "codex"
+    turns = tr.parse_transcript(p)
+    tools = [tc for t in turns for tc in t.tools]
+    assert "make build-fast && kubectl apply -f k8s/" in tools[0].command  # exact command recovered
+    assert tools[0].output == "deployed"
+
+
+def test_openclaw_transcripts_are_no_longer_recognised(tmp_path: Path) -> None:
+    """The fork serves Claude Code and Codex only; OpenClaw JSONL is unknown now."""
+    p = _write(
+        tmp_path / "o.jsonl",
+        [
+            {"type": "message", "id": "m1", "message": {"role": "user", "content": [{"type": "text", "text": "lint"}]}},
+            {
+                "type": "message",
+                "id": "m2",
+                "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+            },
+        ],
+    )
+    with pytest.raises(tr.UnknownTranscriptFormat):
+        tr.parse_transcript(p)
+    assert set(tr._PARSERS) == {"claude", "codex"}
+    assert not hasattr(tr, "_parse_openclaw")
+
+
+def test_unknown_format_raises(tmp_path: Path) -> None:
+    p = _write(tmp_path / "x.jsonl", [{"foo": "bar"}, {"baz": 1}])
+    with pytest.raises(tr.UnknownTranscriptFormat):
+        tr.parse_transcript(p)
+
+
+def test_format_turns_includes_command(tmp_path: Path) -> None:
+    p = _write(
+        tmp_path / "c.jsonl",
+        [
+            {"type": "user", "uuid": "u1", "message": {"content": "go"}},
+            {
+                "type": "assistant",
+                "uuid": "a1",
+                "message": {
+                    "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "uv run pytest"}}]
+                },
+            },
+        ],
+    )
+    rendered = tr.format_turns(tr.parse_transcript(p))
+    assert "uv run pytest" in rendered
+
+
+def test_select_turns_by_id(tmp_path: Path) -> None:
+    p = _write(
+        tmp_path / "c.jsonl",
+        [
+            {"type": "user", "uuid": "aaaa1111", "message": {"content": "one"}},
+            {"type": "user", "uuid": "bbbb2222", "message": {"content": "two"}},
+            {"type": "user", "uuid": "cccc3333", "message": {"content": "three"}},
+        ],
+    )
+    turns = tr.parse_transcript(p)
+    sel = tr.select_turns(turns, "bbbb2222", context=0)
+    assert [t.text for t in sel] == ["two"]
+
+
+def test_tool_output_is_clipped(tmp_path: Path) -> None:
+    p = _write(
+        tmp_path / "c.jsonl",
+        [
+            {"type": "user", "uuid": "u1", "message": {"content": "go"}},
+            {
+                "type": "assistant",
+                "uuid": "a1",
+                "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "x"}}]},
+            },
+            {
+                "type": "user",
+                "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "Z" * 5000}]},
+            },
+        ],
+    )
+    turns = tr.parse_transcript(p)
+    assert len(turns[1].tools[0].output) <= tr.MAX_OUTPUT_CHARS + 20  # clipped, not the full 5000
+
+
+def test_render_is_capped(tmp_path: Path) -> None:
+    rows = [{"type": "user", "uuid": f"u{i}", "message": {"content": "x" * 60}} for i in range(2000)]
+    out = tr.format_turns(tr.parse_transcript(_write(tmp_path / "big.jsonl", rows)))
+    assert len(out) <= tr.MAX_RENDER_CHARS + 80
+    assert "truncated" in out

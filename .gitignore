@@ -3,12 +3,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 
-# Build
-dist/
-build/
-site/
-
-# Virtual environments
+# Development virtual environment (uv sync in the checkout)
 .venv/
 
 # Testing & linting
@@ -17,9 +12,8 @@ site/
 .coverage
 htmlcov/
 
-# Milvus
+# Local derived index
 *.db
-*.milvus
 
 # Runtime
 .memsearch/

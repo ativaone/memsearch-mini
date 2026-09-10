@@ -1,0 +1,12 @@
+{
+  "name": "memsearch-mini",
+  "version": "0.1.0",
+  "description": "Persistent memory for Claude Code — markdown journals indexed in a local SQLite database",
+  "author": {
+    "name": "edgarrc"
+  },
+  "homepage": "https://github.com/edgarrc/memsearch-mini",
+  "repository": "https://github.com/edgarrc/memsearch-mini",
+  "license": "MIT",
+  "keywords": ["memory", "semantic-search", "sqlite", "markdown"]
+}

@@ -1,689 +1,425 @@
-<h1 align="center">
-  <img src="assets/logo-icon.jpg" alt="" width="100" valign="middle">
-  &nbsp;
-  memsearch
-</h1>
+# memsearch-mini
 
-<p align="center">
-  <strong>Cross-platform semantic memory for AI coding agents.</strong>
-</p>
+> ### About this fork
+>
+> memsearch-mini is a reduced fork of [zilliztech/memsearch](https://github.com/zilliztech/memsearch)
+> (MIT). Upstream is a cross-platform memory system for five agent hosts, with a public Python API,
+> a Milvus backend that can point at a local file, a server or Zilliz Cloud, and a stack of optional
+> subsystems on top. This fork keeps one job — persistent memory for **Claude Code and Codex** on a
+> single machine — and deletes everything that only existed to support the rest.
+>
+> - **Two hosts only.** The OpenCode, OpenClaw and DeepSeek Harness plugins are gone.
+> - **SQLite + numpy instead of Milvus.** No server, no Zilliz Cloud, no orphaned `milvus_lite`
+>   processes, and no collections: one `index.db` per project, derived from the markdown.
+> - **No public Python API.** The package exists to back the CLI the hooks call.
+> - **No background maintenance** (`PROJECT.md` / `USER.md`), no memory-to-skill distillation, no LLM
+>   compaction of chunks, no cross-encoder reranker, no file watcher.
+> - **The bash hooks are thin launchers.** They check the kill switch and the runtime, then hand
+>   stdin to Python; all logic lives in `src/memsearch/hooks.py` and `capture.py`.
+> - **The CLI runs from this checkout via `uv run`**, not from a package installed from PyPI, so the
+>   hooks and the CLI they call can never come from different installs.
+> - **Uninstalling leaves nothing behind.** Upstream's hooks installed `uv` for you with
+>   `curl -LsSf https://astral.sh/uv/install.sh | sh`, ran the CLI as
+>   `uvx --from "memsearch[onnx]" memsearch` (which warms uv's cache with the PyPI package), and let
+>   the ONNX model download into the global Hugging Face cache. Uninstalling the plugin removed none
+>   of that.
+> - This fork installs no tools on your behalf — `uv` is a documented prerequisite — and points the
+>   runtime, the uv cache, any downloaded interpreter and the model cache at `~/.memsearch`.
+>   Removing the plugin and that one directory removes everything.
+>
+> Everything that survived — the journal format, the chunker, the embedding providers, the
+> progressive-disclosure recall skill — is upstream's work, kept under the same MIT license.
 
-<p align="center">
-  <a href="https://pypi.org/project/memsearch/"><img src="https://img.shields.io/pypi/v/memsearch?style=flat-square&color=blue" alt="PyPI"></a>
-  <a href="https://zilliztech.github.io/memsearch/platforms/claude-code/"><img src="https://img.shields.io/badge/Claude_Code-plugin-c97539?style=flat-square&logo=claude&logoColor=white" alt="Claude Code"></a>
-  <a href="https://zilliztech.github.io/memsearch/platforms/codex/"><img src="https://img.shields.io/badge/Codex-plugin-ff6b35?style=flat-square" alt="Codex"></a>
-  <a href="https://zilliztech.github.io/memsearch/platforms/dsh/"><img src="https://img.shields.io/badge/DeepSeek_Harness-plugin-4d6bfe?style=flat-square" alt="DeepSeek Harness"></a>
-  <a href="https://zilliztech.github.io/memsearch/platforms/openclaw/"><img src="https://img.shields.io/badge/OpenClaw-plugin-4a9eff?style=flat-square" alt="OpenClaw"></a>
-  <a href="https://zilliztech.github.io/memsearch/platforms/opencode/"><img src="https://img.shields.io/badge/OpenCode-plugin-22c55e?style=flat-square" alt="OpenCode"></a>
-  <a href="https://pypi.org/project/memsearch/"><img src="https://img.shields.io/badge/python-%3E%3D3.10-blue?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
-  <a href="https://github.com/zilliztech/memsearch/blob/main/LICENSE"><img src="https://img.shields.io/github/license/zilliztech/memsearch?style=flat-square" alt="License"></a>
-  <a href="https://github.com/zilliztech/memsearch/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/zilliztech/memsearch/test.yml?branch=main&style=flat-square" alt="Tests"></a>
-  <a href="https://zilliztech.github.io/memsearch/"><img src="https://img.shields.io/badge/docs-memsearch-blue?style=flat-square" alt="Docs"></a>
-  <a href="https://github.com/zilliztech/memsearch/stargazers"><img src="https://img.shields.io/github/stars/zilliztech/memsearch?style=flat-square" alt="Stars"></a>
-  <a href="https://discord.com/invite/FG6hMJStWu"><img src="https://img.shields.io/badge/Discord-chat-7289da?style=flat-square&logo=discord&logoColor=white" alt="Discord"></a>
-  <a href="https://x.com/zilliz_universe"><img src="https://img.shields.io/badge/follow-%40zilliz__universe-000000?style=flat-square&logo=x&logoColor=white" alt="X (Twitter)"></a>
-</p>
+Your agent forgets everything when the session ends. memsearch-mini writes each turn down as
+markdown, indexes it locally, and hands the relevant parts back the next time they matter.
 
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/427b7152-bc16-408c-a8b0-59a2b05fd1e0" alt="memsearch demo" width="800">
-</p>
+## What it does
 
-## 📰 What's New
+- **Every session starts with context.** SessionStart prints an index status line, injects the most
+  recent journal entries into the conversation, and kicks off a background reindex when the index is
+  missing or older than the journals.
+- **Every turn is written down.** The Stop hook extracts the last exchange, has `claude -p` (or
+  `codex exec`) rewrite it as third-person bullets, and appends it to
+  `.memsearch/memory/YYYY-MM-DD.md`.
+- **Recall is a skill, not an injection.** `memory-recall` runs in a forked subagent that searches,
+  expands the promising hits, and can drill into the original transcript — the main conversation
+  only sees the curated answer.
+- **One SQLite index per project**, holding chunks, embeddings and an FTS5 keyword index. It is
+  derived: delete it and the next index run rebuilds it from the markdown.
+- **Nothing leaves the machine** with the default `onnx` provider: embeddings are computed locally by
+  onnxruntime. Only the summarizer talks to a network, and that is the agent CLI you already run.
 
-- **DeepSeek Harness support** — MemSearch now brings automatic capture, pre-step memory injection, native skill-based recall, background maintenance, and a read-only memory browser to [DeepSeek Harness (DSH)](https://zilliztech.github.io/memsearch/platforms/dsh/).
-- **Skills from memory** — MemSearch now distills the workflows you repeat into reusable, installable agent skills (a third "procedural memory" layer) and keeps them up to date in the background. See [Skills from Memory](#skills-from-memory).
-- **Advanced memory maintenance** — optional background tasks keep durable `PROJECT.md` and `USER.md` notes current across sessions. See [Advanced Memory Maintenance](#advanced-memory-maintenance).
+## Requirements
 
----
+- **[uv](https://docs.astral.sh/uv/)** — the plugin runs its CLI through `uv run`. It is a
+  prerequisite and is never installed for you. Hooks look for it on `PATH` plus `~/.local/bin`,
+  `~/bin`, `/usr/local/bin` and `/opt/homebrew/bin`. No system Python is required: uv resolves the
+  interpreter.
+- **`git`** — the project root is `git rev-parse --show-toplevel` when the working directory is in a
+  repository.
+- **`claude` and/or `codex`** — whichever host you use also does the summarizing.
+- **Disk** — the first index downloads the ONNX embedding model (`gpahal/bge-m3-onnx-int8`, several
+  hundred MB) into `~/.memsearch/models/`, plus roughly 90 MB of wheels in the runtime environment
+  under `~/.memsearch/venvs/`.
+- **POSIX** (Linux, macOS, WSL): the hooks rely on `select` on a pipe and detached process groups.
 
-### Why memsearch?
+## Install — Claude Code
 
-- 🌐 **All Platforms, One Memory** — memories flow across [Claude Code](plugins/claude-code/README.md), [Codex](plugins/codex/README.md), [DeepSeek Harness](plugins/dsh/README.md), [OpenClaw](plugins/openclaw/README.md), and [OpenCode](plugins/opencode/README.md). A conversation in one agent becomes searchable context in all others — no extra setup
-- 👥 **For Agent Users**, install a plugin and get persistent memory with zero effort; **for Agent Developers**, use the full [CLI](https://zilliztech.github.io/memsearch/cli/) and [Python API](https://zilliztech.github.io/memsearch/python-api/) to build memory and harness engineering into your own agents
-- 📄 **Markdown is the source of truth** — inspired by [OpenClaw](https://github.com/openclaw/openclaw). Your memories are just `.md` files — human-readable, editable, version-controllable. Milvus is a "shadow index": a derived, rebuildable cache
-- 🔍 **Progressive retrieval, hybrid search, smart dedup, live sync** — 3-layer recall (search → expand → transcript); dense vector + BM25 sparse + RRF reranking; SHA-256 content hashing skips unchanged content; file watcher auto-indexes in real time
+```
+/plugin marketplace add edgarrc/memsearch-mini
+/plugin install memsearch-mini@edgarrc
+```
 
----
+The first session prints:
 
-## 🧑‍💻 For Agent Users
+```
+[memsearch] installing runtime in the background — memory available from the next session
+```
 
-Pick your platform, install the plugin, and you're done. Each plugin captures conversations automatically and provides semantic recall with zero configuration.
+A detached `uv sync` is building the runtime under `~/.memsearch/venvs/`, logging to the `.log` file
+beside it. When it finishes it runs the SessionStart hook once, so the model download and the first
+index build start immediately instead of waiting for the next session. Until the runtime is ready,
+the Stop and UserPromptSubmit hooks print `{}` and do nothing — that first session is not captured,
+on purpose, because a 90 MB download does not belong inside a hook timeout.
 
-<details open>
-<summary><h3>For Claude Code Users</h3></summary>
+For local development, point Claude Code at a working tree instead of the marketplace:
 
 ```bash
-# Install
-/plugin marketplace add zilliztech/memsearch
-/plugin install memsearch
-# Restart Claude Code to activate the plugin
+claude --plugin-dir /path/to/memsearch-mini
 ```
 
-After restarting, just chat with Claude Code as usual. The plugin captures every conversation turn automatically.
-
-**Verify it's working** — after a few conversations, check your memory files:
+## Install — Codex
 
 ```bash
-ls .memsearch/memory/          # you should see daily .md files
-cat .memsearch/memory/$(date +%Y-%m-%d).md
+git clone https://github.com/edgarrc/memsearch-mini.git
+bash memsearch-mini/codex/install.sh
 ```
 
-**Recall memories** — two ways to trigger:
+The installer runs five steps: it checks for `uv`; runs a blocking `bin/memsearch --sync`; copies
+`codex/skills/memory-recall` to `~/.agents/skills/memory-recall`; backs up `~/.codex/hooks.json` to
+`~/.codex/hooks.json.bak` and merges in three entries (SessionStart 10 s, UserPromptSubmit 5 s,
+Stop 30 s); sets `hooks = true` under `[features]` in `~/.codex/config.toml`; and marks the scripts
+executable. Set `MEMSEARCH_SKIP_SYNC=1` to skip the blocking sync and let the first session do it.
+
+The checkout path is baked into both `~/.codex/hooks.json` and the installed skill, so **re-run the
+installer after moving or renaming the clone**. It is idempotent: it strips its own old entries
+(matching any `/hooks/<script>`) as well as upstream's (`plugins/codex/hooks/<script>`) before
+writing, and leaves unrelated hooks alone.
+
+Codex sandboxing: the first index needs network access to download the embedding model. Upstream's
+README recommended running that first session with full access
+(`codex --dangerously-bypass-approvals-and-sandbox`); after the model is cached, a read-only sandbox
+is enough.
+
+To undo all of this, see [Uninstall](#uninstall).
+
+## How it works
 
 ```
-/memory-recall what did we discuss about Redis?
-```
-Or just ask naturally — Claude auto-invokes the skill when it senses the question needs history:
-```
-We discussed Redis caching before, what was the TTL we chose?
+turn ends ─▶ Stop hook ─▶ parse last turn ─▶ claude -p / codex exec ─▶ bullets
+                                                                        │
+              .memsearch/memory/YYYY-MM-DD.md  ◀───────────────────────┘
+                            │
+              index (detached) ─▶ chunk ─▶ embed ─▶ .memsearch/index.db
+                                                          │
+  question ─▶ memory-recall skill ─▶ search (dense + FTS5, fused with RRF)
+                                       └─▶ expand ─▶ transcript
 ```
 
-> 📖 [Claude Code Plugin docs](https://zilliztech.github.io/memsearch/platforms/claude-code/) · [Troubleshooting](https://zilliztech.github.io/memsearch/platforms/claude-code/troubleshooting/)
+### On disk
 
-</details>
+Two places, and only two: the project, and `$MEMSEARCH_HOME` (default `~/.memsearch`). **The plugin
+checkout is never written to at runtime** — no virtualenv inside it, no caches, no state.
 
-<details open>
-<summary><h3>For Codex Users</h3></summary>
+Per project:
+
+| Path | What it is |
+|---|---|
+| `<project>/.memsearch/memory/YYYY-MM-DD.md` | Daily journal — **the source of truth**. Plain markdown, editable, versionable. |
+| `<project>/.memsearch/index.db` | Derived SQLite index: chunk rows, float32 embeddings, an FTS5 table. Rebuildable. |
+| `<project>/.memsearch/index.lock` | Held by a running indexer; `index --skip-if-locked` gives up instead of queueing. |
+
+Under `$MEMSEARCH_HOME`:
+
+| Path | What it is |
+|---|---|
+| `~/.memsearch/config.toml` | The only configuration layer. |
+| `~/.memsearch/venvs/<hash>/` | The runtime, created and kept current by `uv` (`UV_PROJECT_ENVIRONMENT`). The hash comes from the plugin path, so a Claude Code install and a Codex clone get one each. |
+| `~/.memsearch/venvs/<hash>.log` · `<hash>.lock` | Sync log and sync lock — *siblings* of the environment, never inside it. |
+| `~/.memsearch/uv-cache/` | uv's package cache (`UV_CACHE_DIR`). |
+| `~/.memsearch/python/` | Interpreter uv downloaded, if it had to (`UV_PYTHON_INSTALL_DIR`). |
+| `~/.memsearch/models/` | Hugging Face cache (`HF_HOME`) — where the ONNX embedding model lands. |
+| `~/.memsearch/index.log` | Output of every background indexer the hooks spawn (model download, indexing errors). Truncated past 1 MB. |
+
+If you already export `UV_CACHE_DIR`, `HF_HOME` or `UV_PROJECT_ENVIRONMENT`, your values are kept and
+the plugin uses those instead.
+
+### Journal format
+
+```markdown
+## Session 14:32
+
+### 14:32
+<!-- session:b1f0… turn:9f2c… transcript:/home/you/.claude/projects/…/b1f0….jsonl -->
+- User asked how the retry budget interacts with the circuit breaker
+- Claude Code read src/http/retry.py and found the budget is per-host, not per-request
+```
+
+Codex entries carry the other anchor kind, `<!-- session:<id> rollout:<path> -->`, because a Codex
+rollout has no per-turn uuid. The `## Session HH:MM` heading is written lazily — only with the first
+entry of a session that actually produced content — and the anchor itself doubles as the "heading
+already written" marker. The anchors are what makes the third recall layer possible: they point back
+at the raw transcript.
+
+### Hooks
+
+| Event | Timeout | What happens |
+|---|---|---|
+| `SessionStart` | 10 s | Prints `[memsearch v<version>] embedding: <provider>/<model> \| index: N chunks, updated … \| memory: <dir>`, injects a `# Recent Memory` block (two newest journals, at most 40 lines and 1800 bytes) as `additionalContext`, and spawns a detached reindex when the index is absent or stale. |
+| `UserPromptSubmit` | 5 s | Pure bash, never starts Python: prints the hint `[memsearch] Recall available if needed`. |
+| `Stop` | 120 s async (Claude), 30 s (Codex) | Summarizes the last turn, appends it to today's journal, then spawns a detached `index --skip-if-locked`. |
+
+There is no SessionEnd hook — nothing needs stopping. On Codex the Stop hook is two-phase: it parses
+the rollout synchronously (Codex may delete it on return), writes a work file, prints `{}`, and lets
+a detached `hook stop-worker` do the summarizing and indexing.
+
+Every hook is a no-op when `MEMSEARCH_DISABLE=1`, which is exactly how the summarizer child avoids
+re-entering the hooks that spawned it.
+
+### One memory for many projects
+
+`MEMSEARCH_DIR` overrides the *project* directory `<git root>/.memsearch`. Export it and every
+project writes to the same journals and shares one index. (`MEMSEARCH_HOME` is the other one: it
+moves the runtime and caches, not your memories.)
+
+## Configuration
+
+`~/.memsearch/config.toml` is the whole configuration surface — `$MEMSEARCH_HOME` moves the whole
+directory, `MEMSEARCH_CONFIG` moves just this file. The first SessionStart writes
+`provider = "onnx"` if the file does not exist.
+
+```toml
+[embedding]
+provider = "onnx"     # onnx | openai | google | voyage | jina | mistral | ollama | local
+model = ""            # "" means the provider's default model
+api_key = ""          # optional literal; a real environment variable always wins
+base_url = ""         # openai-compatible endpoints only
+batch_size = 0        # 0 means the provider's own default
+
+[chunking]
+max_chunk_size = 1500 # characters; larger sections are split at paragraph boundaries
+overlap_lines = 2     # lines of context carried into a split chunk
+
+[claude]
+summarize_enabled = true    # false disables turn capture for Claude Code
+summarize_model = "haiku"   # passed to `claude -p --model`
+
+[codex]
+summarize_enabled = true
+summarize_model = "gpt-5.1-codex-mini"   # passed to `codex exec -m`
+
+[prompts]
+summarize = ""        # path to a custom template; {{AGENT_NAME}} is substituted
+```
+
+Read and write it with the CLI, always through the launcher in the plugin directory (for a
+marketplace install that is under `~/.claude/plugins/marketplaces/edgarrc/`; for Codex it is
+`<checkout>/bin/memsearch`):
 
 ```bash
-# Install
-git clone --depth 1 https://github.com/zilliztech/memsearch.git
-bash memsearch/plugins/codex/scripts/install.sh
-codex --yolo  # needed for ONNX model network access
+bin/memsearch config list
+bin/memsearch config get embedding.provider
+bin/memsearch config set embedding.provider openai
+bin/memsearch config set claude.summarize_model sonnet
 ```
 
-After installing, chat as usual. Hooks capture and summarize each turn.
+Unknown keys are rejected; `int` and `bool` values are coerced and validated on the way in.
 
-**Verify it's working:**
+## Embedding providers
+
+| Provider | API key | Notes |
+|---|---|---|
+| `onnx` *(default)* | — | Local `gpahal/bge-m3-onnx-int8` on onnxruntime, CPU. Downloaded once into the Hugging Face cache. |
+| `openai` | `OPENAI_API_KEY` | `text-embedding-3-small`. Honours `embedding.base_url` (or `OPENAI_BASE_URL`) for compatible endpoints. |
+| `google` | `GOOGLE_API_KEY` | `gemini-embedding-001`. Set `GOOGLE_GENAI_USE_VERTEXAI=true` to authenticate through Vertex AI instead. |
+| `voyage` | `VOYAGE_API_KEY` | `voyage-3-lite`. |
+| `jina` | `JINA_API_KEY` | `jina-embeddings-v4`. |
+| `mistral` | `MISTRAL_API_KEY` | `mistral-embed`. |
+| `ollama` | — | `nomic-embed-text` against a local server; address from `OLLAMA_HOST` (default `http://localhost:11434`). Dimension is auto-detected. |
+| `local` | — | sentence-transformers `all-MiniLM-L6-v2`; CUDA, MPS or CPU, auto-detected. |
+
+`embedding.api_key` is an alternative to exporting the variable; a real environment variable takes
+precedence over it.
+
+Each provider needs its own SDK, so `bin/memsearch` reads `embedding.provider` straight out of the
+config file and passes `--extra onnx --extra <provider>` to `uv`. The runtime remembers which extras
+it was built with, so switching provider triggers an automatic resync: the next session shows
+`installing runtime in the background` and picks it up from there, or run `bin/memsearch --sync` to
+do it right away (any direct `bin/memsearch <command>` call also resyncs inline first).
+
+Switching provider or model changes the vectors, so the identity recorded in the index no longer
+matches: the next `index` run empties the database and rebuilds it (and says so on stderr), while
+`search`, `expand` and `stats` refuse with an actionable error until that happens.
+
+## CLI reference
+
+Always invoke it as `<plugin>/bin/memsearch`, never as a bare `memsearch` — the launcher is what
+pins the CLI to this checkout.
+
+| Command | What it does |
+|---|---|
+| `memsearch --version` | Version of the installed package. |
+| `memsearch index [PATHS]... [--force] [--skip-if-locked]` | Index markdown; defaults to the project's memory directory. `--force` re-embeds everything, `--skip-if-locked` returns at once when another indexer is running. |
+| `memsearch search QUERY [-k N] [--json]` | Hybrid search: dense cosine + FTS5 keywords, fused with RRF. |
+| `memsearch expand CHUNK_ID [--lines N] [--json]` | The full markdown section a chunk came from. |
+| `memsearch transcript PATH [--turn UUID] [--context N] [--json]` | Render the original conversation — including tool calls — from a Claude Code JSONL or a Codex rollout. |
+| `memsearch config get KEY` · `set KEY VALUE` · `list [--json]` | Read and write `config.toml`. |
+| `memsearch stats` | Chunk count, provider, model and last index time. |
+| `memsearch reset --yes` | Empty this project's index. The markdown is untouched. |
+| `memsearch hook …` | Internal: what the launchers exec. Always prints one JSON object and exits 0. |
+
+Exit codes: `0` success, `1` runtime error, `2` usage error, `3` unrecognized transcript format.
+
+## Troubleshooting
+
+- **Anything unexplained: read the sync log**, `~/.memsearch/venvs/<hash>.log`. Every sync appends a
+  timestamped header there, and the log is truncated when it passes 1 MB.
+- **`installing runtime in the background` on every session** — the sync keeps failing. Read that
+  log, then run `bin/memsearch --sync` by hand to see the error in the foreground.
+- **`index: not built yet — building in background` on every session** — the background indexer
+  keeps failing (no network for the model download, a broken provider, a missing API key). Read
+  `~/.memsearch/index.log`, then run `bin/memsearch index` by hand to see the error in the foreground.
+- **`uv not found on PATH — memory disabled`** — install uv from <https://docs.astral.sh/uv/>. The
+  hooks add `~/.local/bin`, `~/bin`, `/usr/local/bin` and `/opt/homebrew/bin` before giving up.
+- **`ERROR: <VAR> not set — memory search disabled`** — export the provider's key, or go back to the
+  local provider with `bin/memsearch config set embedding.provider onnx`.
+- **`ERROR: onnxruntime not installed`** — the runtime is incomplete: `bin/memsearch --sync`.
+- **Results look stale or wrong** — `bin/memsearch index --force` re-embeds everything. To start
+  clean, `bin/memsearch reset --yes` and index again; deleting `index.db` works too.
+- **Turn it off** — `MEMSEARCH_DISABLE=1` makes every launcher and hook print `{}` and exit.
+- **Relocate everything** — `MEMSEARCH_HOME=/somewhere/else` moves the whole directory;
+  `UV_PROJECT_ENVIRONMENT` moves just the runtime environment (its log is always
+  `<environment path>.log`). Useful when `$HOME` is on a filesystem you would rather keep small.
+- **`this SQLite build has no FTS5 module`** — set `MEMSEARCH_NO_FTS=1` for dense-vector search only,
+  or use a Python whose `sqlite3` was built with FTS5.
+- **A journal is being skipped** — files above `MEMSEARCH_MAX_FILE_MB` (default 8) are reported as
+  failures and skipped; the rest of the run still succeeds. Raise the limit or split the file.
+- **Codex summaries look truncated** — the rollout text handed to the summarizer is capped at
+  `MEMSEARCH_SUMMARY_MAX_CHARS` characters (default 8000).
+
+## Uninstall
+
+Removing this plugin removes everything it ever created — that is a deliberate difference from
+upstream, whose self-installed `uv`, warmed package cache and globally cached embedding model all
+survived an uninstall.
+
+### What the plugin writes, and where
+
+| Location | What | Removed by |
+|---|---|---|
+| The plugin checkout | **Nothing.** It is read-only at runtime. | Deleting the clone / `/plugin uninstall` |
+| `~/.memsearch/` | Runtime environment, uv cache, downloaded interpreter, embedding model, `config.toml` | `uninstall.sh --purge`, or `rm -rf ~/.memsearch` |
+| `<project>/.memsearch/memory/*.md` | Your journals — **kept**, they are the source of truth | You, by hand |
+| `<project>/.memsearch/index.db`, `index.lock` | Derived index; safe to delete any time | `rm -f <project>/.memsearch/index.db* <project>/.memsearch/index.lock` |
+| `~/.codex/hooks.json`, `~/.agents/skills/memory-recall` | Codex wiring | `uninstall.sh` |
+| `$TMPDIR/memsearch-stop.*.json` | Transient Codex work files, deleted by the worker that reads them | Itself |
+
+### Claude Code
+
+```
+/plugin uninstall memsearch-mini@edgarrc
+/plugin marketplace remove edgarrc
+```
+
+### Codex
 
 ```bash
-ls .memsearch/memory/
+bash /path/to/memsearch-mini/uninstall.sh
 ```
 
-**Recall memories** — use the skill:
+It removes only memsearch's own entries from `~/.codex/hooks.json`, and removes
+`~/.agents/skills/memory-recall` only if the skill there is actually memsearch's. It deliberately
+leaves `hooks = true` under `[features]` in `~/.codex/config.toml` alone, because other tools may
+depend on it. It also prints how much `~/.memsearch` is holding, and the two Claude Code commands
+above.
 
-```
-$memory-recall what did we discuss about deployment?
-```
-
-> 📖 [Codex Plugin docs](https://zilliztech.github.io/memsearch/platforms/codex/)
-
-</details>
-
-<details open>
-<summary><h3>For DeepSeek Harness Users</h3></summary>
+### Then, for either host
 
 ```bash
-# Install the published plugin into your DSH profile
-uv tool install "memsearch[onnx]"
-dsh plugin --profile web add @zilliz/memsearch-dsh
-# Restart that DSH profile, or start a new session
+bash /path/to/memsearch-mini/uninstall.sh --purge   # or simply: rm -rf ~/.memsearch
 ```
 
-After installing, use DSH normally. Completed turns are captured automatically, and relevant memories are injected before the first model step only when they are useful.
+That takes the runtime, the uv cache, any interpreter uv downloaded, the embedding model and your
+config with it. Project journals are untouched. Finally, delete the checkout if you cloned one.
 
-**Verify it's working:**
+## Migrating from upstream memsearch
+
+Nothing here runs automatically — these are the steps to run on your own machine.
+
+**Claude Code**
+
+```
+/plugin uninstall memsearch
+/plugin marketplace remove memsearch-plugins
+/plugin marketplace add edgarrc/memsearch-mini
+/plugin install memsearch-mini@edgarrc
+```
+
+**Codex** — delete the skills that no longer exist, then reinstall:
 
 ```bash
-ls .memsearch/memory/
+rm -rf ~/.agents/skills/memory-config ~/.agents/skills/memory-to-skill
+bash /path/to/memsearch-mini/codex/install.sh
 ```
 
-**Recall memories** — ask naturally or tell DSH to use the registered `memory-recall` skill:
+The installer replaces `~/.agents/skills/memory-recall` and strips upstream's hook entries
+(`plugins/codex/hooks/…`) from `~/.codex/hooks.json`, keeping a `.bak` of the previous file.
 
-```
-Use memory-recall to find what we decided about the deployment architecture.
-```
-
-The web profile also adds a compact MemSearch dock where you can review skill candidates and browse supported files under `.memsearch/` without editing them.
-
-> 📖 [DeepSeek Harness Plugin docs](https://zilliztech.github.io/memsearch/platforms/dsh/)
-
-</details>
-
-<details>
-<summary><h3>For OpenClaw Users</h3></summary>
+**Optional cleanup of the Milvus era** — none of this is read any more:
 
 ```bash
-# Install from ClawHub
-openclaw plugins install --force clawhub:memsearch
-openclaw config set plugins.entries.memsearch.hooks.allowConversationAccess true
-openclaw config set plugins.entries.memsearch.hooks.allowPromptInjection true
-openclaw gateway restart
+rm -f ~/.memsearch/milvus.db*  ~/.memsearch/.pypi-latest
+rm -f .memsearch/.index-state.json .memsearch/.watch.pid .memsearch/.index.pid   # per project
+pkill -f milvus_lite            # leftover background processes, if any
+uv tool uninstall memsearch     # the old standalone CLI, if you installed it
 ```
 
-After installing, chat in TUI as usual. The plugin captures each turn automatically.
+Upstream also left the embedding model in the shared Hugging Face cache (usually
+`~/.cache/huggingface/hub/models--gpahal--bge-m3-onnx-int8`) and the PyPI package in uv's cache.
+This fork redownloads the model into `~/.memsearch/models/`, so the old copy is only worth keeping if
+another tool of yours uses that cache.
 
-**Verify it's working** — memory files are stored in your agent's workspace:
+**Config** — keep `[embedding]` and `[chunking]` as they are. `[milvus]`, `[llm]`, `[reranker]` and
+`[plugins.*]` are no longer read (they are ignored, so you can leave them or delete them), and
+project-level `.memsearch.toml` files are gone: `~/.memsearch/config.toml` is the only layer.
+Summarization is configured with `[claude]` / `[codex]` `summarize_enabled` and `summarize_model`
+instead of the old `[plugins.<agent>.summarize]` block. `prompts.summarize` still works.
+
+**Your journals carry over unchanged.** `.memsearch/memory/*.md` is the same format; the first
+session after installing sees no index, builds one in the background, and everything is searchable
+again. Chunk ids changed, but nothing on disk refers to them.
+
+## Development
 
 ```bash
-# For the main agent:
-ls ~/.openclaw/workspace/.memsearch/memory/
-# For other agents (e.g. work):
-ls ~/.openclaw/workspace-work/.memsearch/memory/
+uv sync --extra onnx --group dev
+uv run python -m pytest
+uv run ruff check src tests
+uv run ruff format --check src tests
 ```
 
-**Recall memories** — two ways to trigger:
-
-```
-/memory-recall what was the batch size limit we set?
-```
-Or just ask naturally — the LLM auto-invokes memory tools when it senses the question needs history:
-```
-We discussed batch size limits before, what did we decide?
-```
-
-> 📖 [OpenClaw Plugin docs](https://zilliztech.github.io/memsearch/platforms/openclaw/) · [Browse on ClawHub](https://clawhub.ai/plugins/memsearch)
-
-</details>
-
-<details>
-<summary><h3>For OpenCode Users</h3></summary>
-
-```json
-// In ~/.config/opencode/opencode.json
-{ "plugin": ["@zilliz/memsearch-opencode"] }
-```
-
-After installing, chat in TUI as usual. A background daemon captures conversations.
-
-**Verify it's working:**
-
-```bash
-ls .memsearch/memory/    # daily .md files appear after a few conversations
-```
-
-**Recall memories** — two ways to trigger:
-
-```
-/memory-recall what did we discuss about authentication?
-```
-Or just ask naturally — the LLM auto-invokes memory tools when it senses the question needs history:
-```
-We discussed the authentication flow before, what was the approach?
-```
-
-> 📖 [OpenCode Plugin docs](https://zilliztech.github.io/memsearch/platforms/opencode/)
-
-</details>
-
-### ⚙️ Configuration (all platforms)
-
-All plugins share the same memsearch backend. Configure once, works everywhere.
-
-#### Embedding
-
-Defaults to **ONNX bge-m3** — runs locally on CPU, no API key, no cost. On first launch the model (~558 MB) is downloaded from HuggingFace Hub.
-
-```bash
-memsearch config set embedding.provider onnx     # default — local, free
-memsearch config set embedding.provider openai   # needs OPENAI_API_KEY
-memsearch config set embedding.provider ollama   # local, any model
-```
-
-> All providers and models: [Configuration — Embedding Provider](https://zilliztech.github.io/memsearch/home/configuration/#embedding-provider)
-
-#### Milvus Backend
-
-Just change `milvus_uri` (and optionally `milvus_token`) to switch between deployment modes:
-
-**Milvus Lite** (default) — zero config, single file. Great for getting started:
-
-```bash
-# Works out of the box, no setup needed
-memsearch config get milvus.uri   # → ~/.memsearch/milvus.db
-```
-
-⭐ **Zilliz Cloud** (recommended) — fully managed, [free tier available](https://cloud.zilliz.com/signup?utm_source=github&utm_medium=referral&utm_campaign=memsearch-readme) — [sign up](https://cloud.zilliz.com/signup?utm_source=github&utm_medium=referral&utm_campaign=memsearch-readme) 👇:
-
-```bash
-memsearch config set milvus.uri "https://in03-xxx.api.gcp-us-west1.zillizcloud.com"
-memsearch config set milvus.token "your-api-key"
-```
-
-<details>
-<summary>⭐ Sign up for a free Zilliz Cloud cluster</summary>
-
-You can [sign up](https://cloud.zilliz.com/signup?utm_source=github&utm_medium=referral&utm_campaign=memsearch-readme) on Zilliz Cloud to get a free cluster and API key.
-
-![Sign up and get API key](https://raw.githubusercontent.com/zilliztech/claude-context/master/assets/signup_and_get_apikey.png)
-
-</details>
-
-<details>
-<summary>Self-hosted Milvus Server (Docker) — for advanced users</summary>
-
-For multi-user or team environments with a dedicated Milvus instance. Requires Docker. See the [official installation guide](https://milvus.io/docs/install_standalone-docker-compose.md).
-
-```bash
-memsearch config set milvus.uri http://localhost:19530
-```
-
-</details>
-
-> 📖 Full configuration guide: [Configuration](https://zilliztech.github.io/memsearch/home/configuration/) · [Platform comparison](https://zilliztech.github.io/memsearch/platforms/)
-
-#### Capture Summarization Routing
-
-Each plugin keeps its native capture summarizer unless you override it explicitly:
-
-```bash
-memsearch config set plugins.codex.summarize.model gpt-5.1-codex-mini
-memsearch config set plugins.opencode.summarize.model anthropic/claude-haiku
-```
-
-Advanced users can route plugin summarization through a memsearch-managed API provider:
-
-```bash
-memsearch config set llm.providers.openai.type openai
-memsearch config set llm.providers.openai.model gpt-5-mini
-memsearch config set llm.providers.openai.api_key env:OPENAI_API_KEY
-memsearch config set plugins.codex.summarize.provider openai
-```
-
-Leave `plugins.<platform>.summarize.provider` empty to preserve the platform's default behavior. Claude Code, Codex, OpenClaw, and OpenCode also accept `native`; DSH selects its headless-agent backend when the provider is unset. Plugin-specific summarize settings do not fall back to `llm.model`.
-
-You can also disable automatic capture globally for a platform while keeping the plugin installed:
-
-```bash
-memsearch config set plugins.codex.summarize.enabled false
-```
-
-#### Advanced Memory Maintenance
-
-Your agent can keep two higher-level notes current in the background: **`PROJECT.md`** — durable project state (active threads, decisions, risks, next steps) — and **`USER.md`** — your reusable preferences, working style, and recurring goals. They refresh after a session only when the journals changed and a minimum interval has passed, and they are **off by default**.
-
-Turn them on by asking your agent — *"enable MemSearch's PROJECT.md and USER.md maintenance"* — and it configures them through the `memory-config` skill, which can also choose the model/provider, the interval, and custom prompts, or diagnose the current setup. Prefer editing files? The settings live under `[plugins.<agent>.project_review]` and `[plugins.<agent>.user_profile]` in your MemSearch config (both read `.memsearch/memory` and write `.memsearch/PROJECT.md` / `.memsearch/USER.md` by default).
-
-If a background maintenance task seems silent, check `.memsearch/.maintenance-state.json` or ask the `memory-config` skill to inspect it; failed runs record `last_error` and retry on the next due run because failed input digests are not marked successful.
-
-#### Skills from Memory
-
-Beyond the episodic journals and the semantic `PROJECT.md` / `USER.md` notes, MemSearch grows a third memory layer — **procedural memory**: your agent turns the workflows you repeat into reusable, installable skills. You drive it entirely through your agent, in natural language — nothing to memorize:
-
-- *"Make a skill out of what we just did."* — the agent drafts a skill from the session (reading the original transcript so the steps are exact, not guessed), saves it as a candidate, and offers to install it.
-- *"What skill candidates do I have? Install the deploy one."* — the agent lists candidates and installs the one you pick into its own skill directory, where it becomes a real `/`-command.
-
-<p align="center">
-  <img width="1086" height="752" alt="MemSearch skill distillation demo" src="https://github.com/user-attachments/assets/39a90f1c-54e3-4c7a-b168-051f0e096d39">
-</p>
-
-Under the hood, candidates live in a git-tracked `.memsearch/skill-candidates/` store — diffable and revertible, and **inert until you install one** (that step is always yours). An optional background pass can also mine recurring workflows from your history on its own. Distilled skills follow the [Agent Skills](https://agentskills.io) open standard, so one capture is portable across Claude Code, Codex, DSH, OpenClaw, OpenCode, and other compatible agents.
-
-**Turning it on is also just a sentence:** ask your agent *"enable MemSearch skill distillation"* (or *"make it more eager"*) and it configures things through the `memory-config` skill — it's off by default. Prefer editing files? The same settings live under `[plugins.<agent>.memory_to_skill]` in your MemSearch config. Full guide: **[Skills from Memory](https://zilliztech.github.io/memsearch/home/skills-from-memory/)**.
-
-### What can you use it for?
-
-- **Resume debugging threads** — ask how a similar Redis, Docker, database, or deployment issue was fixed last time.
-- **Recover decision rationale** — find why the project chose one architecture, library, migration path, or API design over another.
-- **Trace feature history** — understand how a feature evolved across sessions, including the files changed and tradeoffs discussed.
-- **Do code archaeology** — ask when and why a module, config, or workflow was changed before touching it again.
-- **Find the right session to resume** — ask which previous conversation covered a topic, recover the relevant context, and continue from there.
-- **Carry context across agents** — keep Claude Code, Codex, DeepSeek Harness, OpenClaw, and OpenCode working from the same project memory.
-
----
-
-## 🛠️ For Agent Developers
-
-Beyond ready-to-use plugins, memsearch provides a complete **CLI and Python API** for building memory into your own agents. Whether you're adding persistent context to a custom agent, building a memory-augmented RAG pipeline, or doing harness engineering — the same core engine that powers the plugins is available as a library.
-
-### 🏗️ Architecture Overview
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                  🧑‍💻 For Agent Users (Plugins)                │
-│ Claude Code · Codex · DSH · OpenClaw · OpenCode · Your App   │
-│                              │                               │
-├────────────────────────────┬─────────────────────────────────┤
-│  🛠️ For Agent Developers   │  Build your own with ↓          │
-│  ┌─────────────────────────┴──────────────────────────────┐  │
-│  │           memsearch CLI / Python API                   │  │
-│  │      index · search · expand · watch · compact         │  │
-│  └─────────────────────────┬──────────────────────────────┘  │
-│  ┌─────────────────────────┴──────────────────────────────┐  │
-│  │           Core: Chunker → Embedder → Milvus            │  │
-│  │        Hybrid Search (BM25 + Dense + RRF)              │  │
-│  └────────────────────────────────────────────────────────┘  │
-├──────────────────────────────────────────────────────────────┤
-│  📄 Markdown Files (Source of Truth)                         │
-│  memory/2026-03-27.md · memory/2026-03-26.md · ...           │
-└──────────────────────────────────────────────────────────────┘
-```
-
-Plugins sit on top of the CLI/API layer. The API handles indexing, searching, and Milvus sync. Markdown files are always the source of truth — Milvus is a rebuildable shadow index. Everything below the plugin layer is what you use as an agent developer.
-
-### How Plugins Work (Claude Code as example)
-
-**Capture — after each conversation turn:**
-
-```
-User asks question → Agent responds → Stop hook fires
-                                          │
-                     ┌────────────────────┘
-                     ▼
-              Parse last turn
-                     │
-                     ▼
-         LLM summarizes (haiku)
-         "- User asked about X."
-         "- Claude did Y."
-                     │
-                     ▼
-         Append to memory/2026-03-27.md
-         with <!-- session:UUID --> anchor
-                     │
-                     ▼
-         memsearch index → Milvus
-```
-
-**Recall — 3-layer progressive search:**
-
-```
-User: "What did we discuss about batch size?"
-                     │
-                     ▼
-  L1  memsearch search "batch size"    → ranked chunks
-                     │ (need more?)
-                     ▼
-  L2  memsearch expand <chunk_hash>    → full .md section
-                     │ (need original?)
-                     ▼
-  L3  parse-transcript <session.jsonl> → raw dialogue
-```
-
-### 📄 Markdown as Source of Truth
-
-```
-  Plugins append ──→  .md files  ←── human editable
-                          │
-                          ▼
-                  memsearch watch (live watcher)
-                          │
-                  detects file change
-                          │
-                          ▼
-                  re-chunk changed .md
-                          │
-                  hash each chunk (SHA-256)
-                          │
-              ┌───────────┴───────────┐
-              ▼                       ▼
-       hash unchanged?          hash is new/changed?
-       → skip (no API call)     → embed → upsert to Milvus
-              │                       │
-              └───────────┬───────────┘
-                          ▼
-                ┌──────────────────┐
-                │  Milvus (shadow) │
-                │  always in sync  │
-                │  rebuildable     │
-                └──────────────────┘
-```
-
-### 📦 Installation
-
-```bash
-# Install as a global CLI tool — recommended when you mainly use the
-# `memsearch` command or any of the agent plugins (Claude Code, Codex,
-# DSH, OpenClaw, OpenCode), which all shell out to the CLI.
-uv tool install memsearch       # via uv
-pipx install memsearch          # via pipx
-pip install memsearch           # plain pip
-
-# Install as a project dependency — use this if you want to import
-# `memsearch` from your own Python code (e.g. via the MemSearch class).
-uv add memsearch                # via uv, adds to pyproject.toml
-pip install memsearch           # into an activated venv
-```
-
-<details>
-<summary><b>Optional embedding providers</b></summary>
-
-```bash
-# As a CLI tool (recommended — local ONNX, no API key)
-uv tool install "memsearch[onnx]"
-pipx install "memsearch[onnx]"
-pip install "memsearch[onnx]"
-
-# As a project dependency
-uv add "memsearch[onnx]"
-
-# Other options: [openai], [google], [voyage], [jina], [mistral], [ollama], [local], [all]
-```
-
-</details>
-
-### 🐍 Python API — Give Your Agent Memory
-
-```python
-from memsearch import MemSearch
-
-mem = MemSearch(paths=["./memory"])
-
-await mem.index()                                      # index markdown files
-results = await mem.search("Redis config", top_k=3)    # semantic search
-scoped = await mem.search("pricing", top_k=3, source_prefix="./memory/product")
-print(results[0]["content"], results[0]["score"])       # content + similarity
-```
-
-<details>
-<summary><b>Full example — agent with memory (OpenAI)</b> — click to expand</summary>
-
-```python
-import asyncio
-from datetime import date
-from pathlib import Path
-from openai import OpenAI
-from memsearch import MemSearch
-
-MEMORY_DIR = "./memory"
-llm = OpenAI()                                        # your LLM client
-mem = MemSearch(paths=[MEMORY_DIR])                    # memsearch handles the rest
-
-def save_memory(content: str):
-    """Append a note to today's memory log (OpenClaw-style daily markdown)."""
-    p = Path(MEMORY_DIR) / f"{date.today()}.md"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with open(p, "a") as f:
-        f.write(f"\n{content}\n")
-
-async def agent_chat(user_input: str) -> str:
-    # 1. Recall — search past memories for relevant context
-    memories = await mem.search(user_input, top_k=3)
-    context = "\n".join(f"- {m['content'][:200]}" for m in memories)
-
-    # 2. Think — call LLM with memory context
-    resp = llm.chat.completions.create(
-        model="gpt-5-mini",
-        messages=[
-            {"role": "system", "content": f"You have these memories:\n{context}"},
-            {"role": "user", "content": user_input},
-        ],
-    )
-    answer = resp.choices[0].message.content
-
-    # 3. Remember — save this exchange and index it
-    save_memory(f"## {user_input}\n{answer}")
-    await mem.index()
-
-    return answer
-
-async def main():
-    # Seed some knowledge
-    save_memory("## Team\n- Alice: frontend lead\n- Bob: backend lead")
-    save_memory("## Decision\nWe chose Redis for caching over Memcached.")
-    await mem.index()  # or mem.watch() to auto-index in the background
-
-    # Agent can now recall those memories
-    print(await agent_chat("Who is our frontend lead?"))
-    print(await agent_chat("What caching solution did we pick?"))
-
-asyncio.run(main())
-```
-
-</details>
-
-<details>
-<summary><b>Anthropic Claude example</b> — click to expand</summary>
-
-```bash
-pip install memsearch anthropic
-```
-
-```python
-import asyncio
-from datetime import date
-from pathlib import Path
-from anthropic import Anthropic
-from memsearch import MemSearch
-
-MEMORY_DIR = "./memory"
-llm = Anthropic()
-mem = MemSearch(paths=[MEMORY_DIR])
-
-def save_memory(content: str):
-    p = Path(MEMORY_DIR) / f"{date.today()}.md"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with open(p, "a") as f:
-        f.write(f"\n{content}\n")
-
-async def agent_chat(user_input: str) -> str:
-    # 1. Recall
-    memories = await mem.search(user_input, top_k=3)
-    context = "\n".join(f"- {m['content'][:200]}" for m in memories)
-
-    # 2. Think — call Claude with memory context
-    resp = llm.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1024,
-        system=f"You have these memories:\n{context}",
-        messages=[{"role": "user", "content": user_input}],
-    )
-    answer = resp.content[0].text
-
-    # 3. Remember
-    save_memory(f"## {user_input}\n{answer}")
-    await mem.index()
-    return answer
-
-async def main():
-    save_memory("## Team\n- Alice: frontend lead\n- Bob: backend lead")
-    await mem.index()
-    print(await agent_chat("Who is our frontend lead?"))
-
-asyncio.run(main())
-```
-
-</details>
-
-<details>
-<summary><b>Ollama (fully local, no API key)</b> — click to expand</summary>
-
-```bash
-pip install "memsearch[ollama]"
-ollama pull nomic-embed-text          # embedding model
-ollama pull llama3.2                  # chat model
-```
-
-```python
-import asyncio
-from datetime import date
-from pathlib import Path
-from ollama import chat
-from memsearch import MemSearch
-
-MEMORY_DIR = "./memory"
-mem = MemSearch(paths=[MEMORY_DIR], embedding_provider="ollama")
-
-def save_memory(content: str):
-    p = Path(MEMORY_DIR) / f"{date.today()}.md"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with open(p, "a") as f:
-        f.write(f"\n{content}\n")
-
-async def agent_chat(user_input: str) -> str:
-    # 1. Recall
-    memories = await mem.search(user_input, top_k=3)
-    context = "\n".join(f"- {m['content'][:200]}" for m in memories)
-
-    # 2. Think — call Ollama locally
-    resp = chat(
-        model="llama3.2",
-        messages=[
-            {"role": "system", "content": f"You have these memories:\n{context}"},
-            {"role": "user", "content": user_input},
-        ],
-    )
-    answer = resp.message.content
-
-    # 3. Remember
-    save_memory(f"## {user_input}\n{answer}")
-    await mem.index()
-    return answer
-
-async def main():
-    save_memory("## Team\n- Alice: frontend lead\n- Bob: backend lead")
-    await mem.index()
-    print(await agent_chat("Who is our frontend lead?"))
-
-asyncio.run(main())
-```
-
-</details>
-
-> 📖 Full Python API reference: [Python API docs](https://zilliztech.github.io/memsearch/python-api/)
-
-### ⌨️ CLI Usage
-
-**Setup:**
-
-```bash
-memsearch config init                              # interactive setup wizard
-memsearch config set embedding.provider onnx       # switch embedding provider
-memsearch config set milvus.uri http://localhost:19530  # switch Milvus backend
-```
-
-**Index & Search:**
-
-```bash
-memsearch index ./memory/                          # index markdown files
-memsearch index ./memory/ ./notes/ --force         # re-embed everything
-memsearch index . --ignore-file .gitignore         # opt in to repository ignore rules
-memsearch search "Redis caching"                   # hybrid search (BM25 + vector)
-memsearch search "auth flow" --top-k 10 --json-output  # JSON for scripting
-memsearch expand <chunk_hash>                      # show full section around a chunk
-```
-
-**Live Sync & Maintenance:**
-
-```bash
-memsearch watch ./memory/                          # live file watcher (auto-index on change)
-memsearch compact                                  # LLM-powered chunk summarization
-memsearch stats                                    # show indexed chunk count
-memsearch reset --yes                              # drop all indexed data and rebuild
-```
-
-> 📖 Full CLI reference with all flags: [CLI docs](https://zilliztech.github.io/memsearch/cli/)
-
-## ⚙️ Configuration
-
-Embedding and Milvus backend settings → [Configuration (all platforms)](#️-configuration-all-platforms)
-
-Collection priority: integration-derived default → `~/.memsearch/config.toml` → `.memsearch.toml` → explicit `--collection` or Python argument. Without an integration-derived default, the built-in collection is used.
-
-> 📖 Full config guide: [Configuration](https://zilliztech.github.io/memsearch/home/configuration/)
-
-## 🔗 Links
-
-- 📖 [Documentation](https://zilliztech.github.io/memsearch/) — full guides, API reference, and architecture details
-- 🔌 [Platform Plugins](https://zilliztech.github.io/memsearch/platforms/) — Claude Code, Codex, DeepSeek Harness, OpenClaw, OpenCode
-- 💡 [Design Philosophy](https://zilliztech.github.io/memsearch/design-philosophy/) — why markdown, why Milvus, competitor comparison
-- 🦞 [OpenClaw](https://github.com/openclaw/openclaw) — the memory architecture that inspired memsearch
-- 🗄️ [Milvus](https://milvus.io/) | [Zilliz Cloud](https://cloud.zilliz.com/signup?utm_source=github&utm_medium=referral&utm_campaign=memsearch-readme) — the vector database powering memsearch
-
-## 🤝 Contributing
-
-Bug reports, feature requests, and pull requests are welcome! See the [Contributing Guide](CONTRIBUTING.md) for development setup, testing, and plugin development instructions. For questions and discussions, join us on [Discord](https://discord.com/invite/FG6hMJStWu).
-
-## 📄 License
-
-[MIT](LICENSE)
+CI (`.github/workflows/test.yml`) runs the same commands on Python 3.10 and 3.12, from the lockfile,
+which is the same path a user's install takes. A plain `uv sync` like the one above puts a `.venv` in
+the checkout, which is fine for development — the installed plugin never does that, it keeps its
+environment under `~/.memsearch/venvs/`.
+
+**Release.** Bump the version in three files — `pyproject.toml`, `.claude-plugin/plugin.json`, and
+`.claude-plugin/marketplace.json` (both `metadata.version` and the plugin entry). `tests/test_packaging.py`
+fails if they disagree. Then `uv lock`, run the tests, commit, and tag `vX.Y.Z`. Users pick the new
+version up with `/plugin update`.
+
+## License
+
+MIT — see [LICENSE](LICENSE). This is a derivative work of
+[zilliztech/memsearch](https://github.com/zilliztech/memsearch), Copyright (c) 2025 Zilliz Inc.,
+distributed under the same license.

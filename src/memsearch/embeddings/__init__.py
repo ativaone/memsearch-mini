@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+import os
 from typing import Protocol, runtime_checkable
 
 
@@ -47,14 +49,8 @@ DEFAULT_MODELS: dict[str, str] = {
 }
 
 _INSTALL_HINTS: dict[str, str] = {
-    "openai": "pip install memsearch  (or: uv add memsearch)",
-    "google": 'pip install "memsearch[google]"  (or: uv add "memsearch[google]")',
-    "voyage": 'pip install "memsearch[voyage]"  (or: uv add "memsearch[voyage]")',
-    "jina": 'pip install "memsearch[jina]"  (or: uv add "memsearch[jina]")',
-    "mistral": 'pip install "memsearch[mistral]"  (or: uv add "memsearch[mistral]")',
-    "ollama": 'pip install "memsearch[ollama]"  (or: uv add "memsearch[ollama]")',
-    "local": 'pip install "memsearch[local]"  (or: uv add "memsearch[local]")',
-    "onnx": 'pip install "memsearch[onnx]"  (or: uv add "memsearch[onnx]")',
+    name: f"run 'uv sync --extra {name}' in the plugin directory"
+    for name in ("openai", "google", "voyage", "jina", "mistral", "ollama", "local", "onnx")
 }
 
 
@@ -68,19 +64,10 @@ def get_provider(
 ) -> EmbeddingProvider:
     """Instantiate an embedding provider by name.
 
-    Parameters
-    ----------
-    name:
-        One of "openai", "google", "voyage", "ollama", "local", "onnx".
-    model:
-        Override the default model for the provider.
-    batch_size:
-        Maximum number of texts per embedding API call.
-        ``0`` means use the provider's built-in default.
-    base_url:
-        Override the API base URL (currently only used by the openai provider).
-    api_key:
-        Override the API key (currently only used by the openai provider).
+    *base_url* and *api_key* are forwarded only to the providers whose
+    constructor actually accepts them (decided by signature introspection).  When
+    a provider's SDK only reads the environment, *api_key* is placed in that
+    variable with ``setdefault``, so a real environment variable always wins.
     """
     if name not in _PROVIDERS:
         raise ValueError(f"Unknown embedding provider {name!r}. Available: {', '.join(sorted(_PROVIDERS))}")
@@ -95,18 +82,23 @@ def get_provider(
         raise ImportError(f"Embedding provider {name!r} requires extra dependencies. Install with: {hint}") from exc
 
     cls = getattr(mod, class_name)
+    accepted = inspect.signature(cls.__init__).parameters
     kwargs: dict = {}
     if model is not None:
         kwargs["model"] = model
     if batch_size > 0:
         kwargs["batch_size"] = batch_size
-    if name == "openai":
-        if base_url:
-            kwargs["base_url"] = base_url
-        if api_key:
+    if base_url and "base_url" in accepted:
+        kwargs["base_url"] = base_url
+    if api_key:
+        from ..config import api_key_env_var
+
+        env_var = api_key_env_var(name)
+        if "api_key" in accepted:
             kwargs["api_key"] = api_key
-    elif name in ("jina", "mistral") and api_key:
-        kwargs["api_key"] = api_key
+        elif env_var:
+            # The SDK only reads the environment; a real env var still wins.
+            os.environ.setdefault(env_var, api_key)
     return cls(**kwargs)
 
 

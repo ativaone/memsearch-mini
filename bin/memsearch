@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# memsearch CLI entry point: runs the CLI from this checkout through uv, so the
+# hooks and the CLI can never come from different installs.
+#
+#   bin/memsearch --sync      blocking `uv sync` (installer and diagnostics)
+#   bin/memsearch <args...>   forwarded to the CLI
+set -uo pipefail
+
+# Resolve the symlink chain without `readlink -f` (absent on BSD/macOS).
+_self="${BASH_SOURCE[0]}"
+_hops=0
+while [ -L "$_self" ] && [ "$_hops" -lt 40 ]; do
+  _link="$(readlink "$_self" 2>/dev/null)" || break
+  case "$_link" in
+    /*) _self="$_link" ;;
+    *) _self="$(dirname "$_self")/$_link" ;;
+  esac
+  _hops=$((_hops + 1))
+done
+_BIN_DIR="$(cd "$(dirname "$_self")" && pwd -P)"
+source "$_BIN_DIR/../hooks/common.sh"
+export MEMSEARCH_PLUGIN_ROOT="$ROOT"
+
+have_uv || {
+  echo "[memsearch] uv not found; install it from https://docs.astral.sh/uv/" >&2
+  exit 1
+}
+
+if [ "${1:-}" = "--sync" ]; then
+  if sync_now; then
+    echo "[memsearch] runtime ready: $VENV"
+    exit 0
+  fi
+  # A concurrent hook may hold the lock and have finished the work for us.
+  if venv_ready; then
+    echo "[memsearch] runtime already synced by another process: $VENV"
+    exit 0
+  fi
+  echo "[memsearch] sync failed; see $SYNC_LOG" >&2
+  exit 1
+fi
+
+venv_ready || sync_now || {
+  echo "[memsearch] runtime not ready; see $SYNC_LOG" >&2
+  exit 1
+}
+exec uv run --project "$ROOT" --frozen --no-sync $(extras_args) memsearch "$@"

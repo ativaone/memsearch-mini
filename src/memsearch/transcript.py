@@ -1,19 +1,15 @@
 """Cross-format transcript parsing for L3 drill-down.
 
 The daily journals are lossy summaries — they drop the exact commands an agent
-ran. To write an accurate skill you need the originals, which live in each
-agent's raw session transcript. The formats differ per agent, so this module
-parses them into a common shape that **includes tool calls (the exact commands)
-and their output**, and exposes it as the ``memsearch transcript`` CLI command.
+ran. Those live only in the raw session transcript, whose format differs per
+agent, so this module parses both into a common shape that **includes tool calls
+(the exact commands) and their output** and exposes it as the ``memsearch
+transcript`` CLI command, which the memory-recall skill calls after ``search``
+and ``expand`` when it needs the original conversation.
 
-Both paths use that one command: the ``/memory-to-skill`` skill calls it
-on-demand, and the background distillation tool calls it too — so the
-format-specific parsing lives in one place instead of being re-derived by each
-agent from raw JSONL.
-
-Auto-detected formats: Claude Code JSONL, Codex rollout JSONL, OpenClaw JSONL.
-Unknown formats raise :class:`UnknownTranscriptFormat` so the caller can fall
-back to reading the file directly.
+Auto-detected formats: Claude Code JSONL and Codex rollout JSONL.  Anything else
+raises :class:`UnknownTranscriptFormat` so the caller can fall back to reading
+the file directly.
 """
 
 from __future__ import annotations
@@ -70,8 +66,6 @@ def detect_format(entries: list[dict[str, Any]]) -> str:
         t = obj.get("type")
         if t in ("event_msg", "response_item"):
             return "codex"
-        if t == "message" and isinstance(obj.get("message"), dict) and "role" in obj["message"]:
-            return "openclaw"
         if t in ("user", "assistant") and "message" in obj:
             return "claude"
     raise UnknownTranscriptFormat("could not recognize transcript format")
@@ -196,35 +190,7 @@ def _parse_codex(entries: list[dict[str, Any]]) -> list[Turn]:
     return turns
 
 
-def _parse_openclaw(entries: list[dict[str, Any]]) -> list[Turn]:
-    turns: list[Turn] = []
-    for obj in entries:
-        if obj.get("type") != "message":
-            continue
-        msg = obj.get("message", {})
-        role = msg.get("role", "")
-        if role not in ("user", "assistant"):
-            continue
-        content = msg.get("content", "")
-        turn = Turn(role=role, uuid=obj.get("id", ""), text=_as_text(content).strip())
-        if isinstance(content, list):
-            for b in content:
-                if not isinstance(b, dict):
-                    continue
-                if b.get("type") == "toolCall":
-                    name = b.get("name", b.get("toolName", "tool"))
-                    turn.tools.append(
-                        ToolCall(name=name, command=_render_tool_input(b.get("input", b.get("parameters", {}))))
-                    )
-                elif b.get("type") == "toolResult" and turn.tools:
-                    res = b.get("text", b.get("content", ""))
-                    turn.tools[-1].output = _clip(_as_text(res) if not isinstance(res, str) else res)
-        if turn.text or turn.tools:
-            turns.append(turn)
-    return turns
-
-
-_PARSERS = {"claude": _parse_claude, "codex": _parse_codex, "openclaw": _parse_openclaw}
+_PARSERS = {"claude": _parse_claude, "codex": _parse_codex}
 
 
 def parse_transcript(path: str | Path) -> list[Turn]:

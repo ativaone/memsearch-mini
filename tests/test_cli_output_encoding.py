@@ -1,3 +1,10 @@
+"""UTF-8 survives every stream the CLI writes to, including legacy code pages.
+
+Journals hold whatever the user typed — accented Latin, CJK, emoji — and hooks
+run with whatever ``PYTHONIOENCODING`` the host exports, so the CLI reconfigures
+its streams before click parses argv and encodes JSON without escaping.
+"""
+
 from __future__ import annotations
 
 import io
@@ -109,7 +116,7 @@ def test_click_runner_capture_remains_supported() -> None:
     result = CliRunner().invoke(cli_module.cli, ["--version"])
 
     assert result.exit_code == 0
-    assert "version" in result.output
+    assert "version" in result.stdout
 
 
 def test_import_does_not_reconfigure_streams() -> None:
@@ -131,24 +138,15 @@ def test_import_does_not_reconfigure_streams() -> None:
 
 
 def test_redirected_output_survives_a_legacy_code_page(tmp_path) -> None:
-    (tmp_path / ".memsearch.toml").write_text(
-        '[index]\nnotes_dir = "/tmp/amyloid-β-notes"\n',
-        encoding="utf-8",
-    )
+    config_file = tmp_path / "config.toml"
+    config_file.write_text('[embedding]\nmodel = "amyloid-β-embed"\n', encoding="utf-8")
 
     proc = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "memsearch",
-            "config",
-            "list",
-            "--project",
-            "--json-output",
-        ],
+        [sys.executable, "-m", "memsearch", "config", "list", "--json"],
         cwd=tmp_path,
         env={
             **os.environ,
+            "MEMSEARCH_CONFIG": str(config_file),
             "PYTHONIOENCODING": "cp1252",
         },
         capture_output=True,
@@ -156,5 +154,20 @@ def test_redirected_output_survives_a_legacy_code_page(tmp_path) -> None:
 
     assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
     output = proc.stdout.decode("utf-8")
-    assert "amyloid-β-notes" in output
-    assert isinstance(json.loads(output), dict)
+    assert "amyloid-β-embed" in output
+    assert json.loads(output)["embedding"]["model"] == "amyloid-β-embed"
+
+
+def test_config_list_keeps_non_ascii_unescaped(tmp_path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text('[prompts]\nsummarize = "/notes/非拉丁字符.txt"\n', encoding="utf-8")
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "memsearch", "config", "list"],
+        cwd=tmp_path,
+        env={**os.environ, "MEMSEARCH_CONFIG": str(config_file), "PYTHONIOENCODING": "cp1252"},
+        capture_output=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
+    assert "prompts.summarize = /notes/非拉丁字符.txt" in proc.stdout.decode("utf-8")
