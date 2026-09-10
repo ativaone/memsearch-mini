@@ -1,8 +1,8 @@
-"""Tests for the plugin shell: ``hooks/*.sh`` and ``bin/memsearch``.
+"""Tests for the plugin shell: ``hooks/*.sh`` and ``bin/memsearch-mini``.
 
 The launchers run as real processes against a copy of the real scripts, with a
 fake ``uv`` first on PATH, a temporary ``HOME``, a temporary
-``UV_PROJECT_ENVIRONMENT`` and a temporary ``MEMSEARCH_CONFIG``. No test can
+``UV_PROJECT_ENVIRONMENT`` and a temporary ``MEMSEARCH_MINI_CONFIG``. No test can
 reach the real uv, the real home, the real config or the real project
 environment.
 
@@ -35,9 +35,9 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 
-UV_MISSING = "[memsearch] uv not found on PATH"
-INSTALLING = "[memsearch] installing runtime in the background"
-RECALL_HINT = "[memsearch] Recall available if needed"
+UV_MISSING = "[memsearch-mini] uv not found on PATH"
+INSTALLING = "[memsearch-mini] installing runtime in the background"
+RECALL_HINT = "[memsearch-mini] Recall available if needed"
 
 # Fake uv. Logs every invocation, then emulates the two subcommands the plugin
 # shell uses: `uv sync` materialises the fake CLI inside the environment,
@@ -50,15 +50,15 @@ printf '%s\n' "$*" >> "$FAKE_UV_LOG"
   printf 'UV_CACHE_DIR=%s\n' "${UV_CACHE_DIR-}"
   printf 'UV_PYTHON_INSTALL_DIR=%s\n' "${UV_PYTHON_INSTALL_DIR-}"
   printf 'HF_HOME=%s\n' "${HF_HOME-}"
-  printf 'MEMSEARCH_HOME=%s\n' "${MEMSEARCH_HOME-}"
+  printf 'MEMSEARCH_MINI_HOME=%s\n' "${MEMSEARCH_MINI_HOME-}"
 } >> "$FAKE_ENV_LOG"
 case "${1:-}" in
   sync)
     if [ -n "${FAKE_SYNC_SLEEP:-}" ]; then sleep "$FAKE_SYNC_SLEEP"; fi
     if [ "${FAKE_SYNC_RC:-0}" = "0" ]; then
       mkdir -p "$UV_PROJECT_ENVIRONMENT/bin"
-      cp "$FAKE_MEMSEARCH" "$UV_PROJECT_ENVIRONMENT/bin/memsearch"
-      chmod +x "$UV_PROJECT_ENVIRONMENT/bin/memsearch"
+      cp "$FAKE_MEMSEARCH_MINI_MINI" "$UV_PROJECT_ENVIRONMENT/bin/memsearch-mini"
+      chmod +x "$UV_PROJECT_ENVIRONMENT/bin/memsearch-mini"
     fi
     exit "${FAKE_SYNC_RC:-0}"
     ;;
@@ -66,7 +66,7 @@ case "${1:-}" in
     shift
     while [ $# -gt 0 ]; do
       case "$1" in
-        memsearch) shift; exec "$UV_PROJECT_ENVIRONMENT/bin/memsearch" "$@" ;;
+        memsearch-mini) shift; exec "$UV_PROJECT_ENVIRONMENT/bin/memsearch-mini" "$@" ;;
         python|python3) shift; exec "$FAKE_PYTHON" "$@" ;;
         --project|--extra|--python) shift 2 ;;
         *) shift ;;
@@ -78,16 +78,16 @@ esac
 exit 0
 """
 
-# Fake memsearch CLI. Logs argv, drains stdin the way hooks.read_payload does
+# Fake memsearch-mini CLI. Logs argv, drains stdin the way hooks.read_payload does
 # (bounded by a select timeout, so an open pipe cannot hang the test), then
 # prints $FAKE_STDOUT (default "{}") and exits $FAKE_RC.
-FAKE_MEMSEARCH = """#!__PYTHON__
+FAKE_MEMSEARCH_MINI_MINI = """#!__PYTHON__
 import os
 import select
 import sys
 import time
 
-with open(os.environ["FAKE_MEMSEARCH_LOG"], "a", encoding="utf-8") as fh:
+with open(os.environ["FAKE_MEMSEARCH_MINI_LOG"], "a", encoding="utf-8") as fh:
     fh.write(" ".join(sys.argv[1:]) + "\\n")
 
 buf = b""
@@ -106,7 +106,7 @@ try:
         buf += chunk
 except Exception:
     pass
-with open(os.environ["FAKE_MEMSEARCH_STDIN_LOG"], "ab") as fh:
+with open(os.environ["FAKE_MEMSEARCH_MINI_STDIN_LOG"], "ab") as fh:
     fh.write(buf)
 
 out = os.environ.get("FAKE_STDOUT", "{}")
@@ -132,11 +132,11 @@ class Plugin:
 
     @property
     def cli_log(self) -> Path:
-        return Path(self.env["FAKE_MEMSEARCH_LOG"])
+        return Path(self.env["FAKE_MEMSEARCH_MINI_LOG"])
 
     @property
     def stdin_log(self) -> Path:
-        return Path(self.env["FAKE_MEMSEARCH_STDIN_LOG"])
+        return Path(self.env["FAKE_MEMSEARCH_MINI_STDIN_LOG"])
 
     @property
     def sync_log(self) -> Path:
@@ -144,7 +144,7 @@ class Plugin:
 
     @property
     def ms_home(self) -> Path:
-        return Path(self.env["MEMSEARCH_HOME"])
+        return Path(self.env["MEMSEARCH_MINI_HOME"])
 
     @property
     def default_venv(self) -> Path:
@@ -176,7 +176,7 @@ class Plugin:
 
     @property
     def stamp(self) -> Path:
-        return self.venv / ".memsearch-synced"
+        return self.venv / ".memsearch-mini-synced"
 
     def mark_ready(self, extras: str = "--extra onnx") -> None:
         """Materialise a synced environment the way `sync_now` would.
@@ -186,8 +186,8 @@ class Plugin:
         """
         bindir = self.venv / "bin"
         bindir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(self.env["FAKE_MEMSEARCH"], bindir / "memsearch")
-        (bindir / "memsearch").chmod(0o755)
+        shutil.copy2(self.env["FAKE_MEMSEARCH_MINI_MINI"], bindir / "memsearch-mini")
+        (bindir / "memsearch-mini").chmod(0o755)
         self.stamp.write_text(extras + "\n", encoding="utf-8")
         newer = time.time() + 5
         os.utime(self.stamp, (newer, newer))
@@ -252,14 +252,14 @@ def plugin(tmp_path: Path) -> Plugin:
     root.mkdir()
     shutil.copytree(REPO / "bin", root / "bin")
     shutil.copytree(REPO / "hooks", root / "hooks")
-    for script in [root / "bin" / "memsearch", *(root / "hooks").glob("*.sh")]:
+    for script in [root / "bin" / "memsearch-mini", *(root / "hooks").glob("*.sh")]:
         script.chmod(0o755)
     (root / "pyproject.toml").write_text('[project]\nname = "probe"\nversion = "0.0.0"\n', encoding="utf-8")
     (root / "uv.lock").write_text("version = 1\n", encoding="utf-8")
 
     # conftest's isolated_home fixture may have created these already.
     home = tmp_path / "home"
-    (home / ".memsearch").mkdir(parents=True, exist_ok=True)
+    (home / ".memsearch-mini").mkdir(parents=True, exist_ok=True)
     tmp = tmp_path / "tmp"
     tmp.mkdir(exist_ok=True)
     logs = tmp_path / "logs"
@@ -269,8 +269,8 @@ def plugin(tmp_path: Path) -> Plugin:
     bindir.mkdir()
     (bindir / "uv").write_text(FAKE_UV, encoding="utf-8")
     (bindir / "uv").chmod(0o755)
-    fake_cli = tmp_path / "fake-memsearch"
-    fake_cli.write_text(FAKE_MEMSEARCH.replace("__PYTHON__", sys.executable), encoding="utf-8")
+    fake_cli = tmp_path / "fake-memsearch-mini"
+    fake_cli.write_text(FAKE_MEMSEARCH_MINI_MINI.replace("__PYTHON__", sys.executable), encoding="utf-8")
     fake_cli.chmod(0o755)
 
     env = {
@@ -278,14 +278,14 @@ def plugin(tmp_path: Path) -> Plugin:
         "HOME": str(home),
         "TMPDIR": str(tmp),
         "LANG": "C.UTF-8",
-        "MEMSEARCH_HOME": str(tmp_path / "ms-home"),
+        "MEMSEARCH_MINI_HOME": str(tmp_path / "ms-home"),
         "UV_PROJECT_ENVIRONMENT": str(tmp_path / "venv"),
-        "MEMSEARCH_CONFIG": str(home / ".memsearch" / "config.toml"),
+        "MEMSEARCH_MINI_CONFIG": str(home / ".memsearch-mini" / "config.toml"),
         "FAKE_UV_LOG": str(logs / "uv.log"),
         "FAKE_ENV_LOG": str(logs / "env.log"),
-        "FAKE_MEMSEARCH_LOG": str(logs / "cli.log"),
-        "FAKE_MEMSEARCH_STDIN_LOG": str(logs / "stdin.log"),
-        "FAKE_MEMSEARCH": str(fake_cli),
+        "FAKE_MEMSEARCH_MINI_LOG": str(logs / "cli.log"),
+        "FAKE_MEMSEARCH_MINI_STDIN_LOG": str(logs / "stdin.log"),
+        "FAKE_MEMSEARCH_MINI_MINI": str(fake_cli),
         "FAKE_PYTHON": sys.executable,
     }
     return Plugin(root=root, home=home, venv=tmp_path / "venv", env=env)
@@ -395,19 +395,19 @@ def test_failing_cli_leaves_stdout_empty_or_json(plugin: Plugin) -> None:
 
 def test_cli_stdout_is_forwarded_verbatim(plugin: Plugin) -> None:
     plugin.mark_ready()
-    payload = '{"systemMessage": "[memsearch v0.1.0] ready"}'
+    payload = '{"systemMessage": "[memsearch-mini v0.1.0] ready"}'
 
     result = plugin.run("session-start.sh", "claude", stdin="{}", extra_env={"FAKE_STDOUT": payload})
 
     assert result.returncode == 0
-    assert json.loads(result.stdout)["systemMessage"] == "[memsearch v0.1.0] ready"
+    assert json.loads(result.stdout)["systemMessage"] == "[memsearch-mini v0.1.0] ready"
 
 
 @pytest.mark.parametrize("script", ["session-start.sh", "stop.sh", "user-prompt-submit.sh"])
 def test_kill_switch_never_reaches_uv(plugin: Plugin, script: str) -> None:
     plugin.mark_ready()
 
-    result = plugin.run(script, "claude", stdin="{}", extra_env={"MEMSEARCH_DISABLE": "1"})
+    result = plugin.run(script, "claude", stdin="{}", extra_env={"MEMSEARCH_MINI_DISABLE": "1"})
 
     assert result.returncode == 0
     assert result.stdout.strip() == "{}"
@@ -470,7 +470,7 @@ def test_uv_lock_newer_than_stamp_means_not_ready(plugin: Plugin) -> None:
 
     assert INSTALLING in json.loads(result.stdout)["systemMessage"]
     # At least one: the artificial future mtime keeps the environment "not
-    # ready" even after the sync, so the detached child's own bin/memsearch
+    # ready" even after the sync, so the detached child's own bin/memsearch-mini
     # call syncs a second time. A real sync stamps itself newer than uv.lock.
     assert plugin.wait_for(lambda: len(plugin.sync_calls()) >= 1)
 
@@ -487,7 +487,7 @@ def test_pyproject_newer_than_stamp_means_not_ready(plugin: Plugin) -> None:
 
 def test_missing_stamp_means_not_ready(plugin: Plugin) -> None:
     plugin.mark_ready()
-    (plugin.venv / ".memsearch-synced").unlink()
+    (plugin.venv / ".memsearch-mini-synced").unlink()
 
     result = plugin.run("session-start.sh", "claude", stdin="{}")
 
@@ -505,8 +505,8 @@ def test_sync_detached_returns_immediately_while_the_child_runs(plugin: Plugin) 
     assert result.returncode == 0
     # The child is still sleeping inside `uv sync` when the parent is back.
     assert elapsed < 2.0
-    assert not (plugin.venv / "bin" / "memsearch").exists()
-    assert plugin.wait_for(lambda: (plugin.venv / "bin" / "memsearch").exists(), timeout=20)
+    assert not (plugin.venv / "bin" / "memsearch-mini").exists()
+    assert plugin.wait_for(lambda: (plugin.venv / "bin" / "memsearch-mini").exists(), timeout=20)
 
 
 def test_sync_lock_makes_the_loser_give_up_at_once(plugin: Plugin) -> None:
@@ -525,7 +525,7 @@ def test_sync_now_reports_failure_and_releases_the_lock(plugin: Plugin) -> None:
 
     assert "rc=3" in result.stdout
     assert not plugin.venv.with_name(plugin.venv.name + ".lock").exists()
-    assert not (plugin.venv / ".memsearch-synced").exists()
+    assert not (plugin.venv / ".memsearch-mini-synced").exists()
 
 
 def test_sync_log_never_lands_inside_the_venv(plugin: Plugin) -> None:
@@ -554,7 +554,7 @@ def test_extras_args_defaults_to_onnx_only(plugin: Plugin) -> None:
 
 @pytest.mark.parametrize("provider", ["openai", "google", "voyage", "jina", "mistral", "ollama", "local"])
 def test_extras_args_adds_the_configured_provider(plugin: Plugin, provider: str) -> None:
-    Path(plugin.env["MEMSEARCH_CONFIG"]).write_text(
+    Path(plugin.env["MEMSEARCH_MINI_CONFIG"]).write_text(
         f'[embedding]\nprovider = "{provider}"\nmodel = ""\n', encoding="utf-8"
     )
 
@@ -565,7 +565,7 @@ def test_extras_args_adds_the_configured_provider(plugin: Plugin, provider: str)
 
 @pytest.mark.parametrize("value", ['"onnx"', '"nonsense"', "'openai'", "openai"])
 def test_extras_args_handles_quotes_and_unknown_providers(plugin: Plugin, value: str) -> None:
-    Path(plugin.env["MEMSEARCH_CONFIG"]).write_text(f"[embedding]\nprovider = {value}\n", encoding="utf-8")
+    Path(plugin.env["MEMSEARCH_MINI_CONFIG"]).write_text(f"[embedding]\nprovider = {value}\n", encoding="utf-8")
 
     result = plugin.bash("extras_args")
 
@@ -577,19 +577,19 @@ def test_extras_args_reaches_uv_run(plugin: Plugin) -> None:
     # Built with the same extras the config asks for, so the launcher runs the
     # CLI instead of resyncing.
     plugin.mark_ready(extras="--extra onnx --extra openai")
-    Path(plugin.env["MEMSEARCH_CONFIG"]).write_text('[embedding]\nprovider = "openai"\n', encoding="utf-8")
+    Path(plugin.env["MEMSEARCH_MINI_CONFIG"]).write_text('[embedding]\nprovider = "openai"\n', encoding="utf-8")
 
     plugin.run("session-start.sh", "claude", stdin="{}")
 
     assert "--extra onnx --extra openai" in plugin.uv_calls()[-1]
 
 
-# --- bin/memsearch ------------------------------------------------------------
+# --- bin/memsearch-mini ------------------------------------------------------------
 
 
-def test_bin_memsearch_syncs_when_the_runtime_is_missing(plugin: Plugin) -> None:
+def test_bin_memsearch_mini_syncs_when_the_runtime_is_missing(plugin: Plugin) -> None:
     result = subprocess.run(
-        ["bash", str(plugin.root / "bin" / "memsearch"), "search", "foo", "-k", "5", "--json"],
+        ["bash", str(plugin.root / "bin" / "memsearch-mini"), "search", "foo", "-k", "5", "--json"],
         capture_output=True,
         text=True,
         env=plugin.env,
@@ -602,9 +602,9 @@ def test_bin_memsearch_syncs_when_the_runtime_is_missing(plugin: Plugin) -> None
     assert plugin.cli_calls() == ["search foo -k 5 --json"]
 
 
-def test_bin_memsearch_sync_flag_is_blocking(plugin: Plugin) -> None:
+def test_bin_memsearch_mini_sync_flag_is_blocking(plugin: Plugin) -> None:
     result = subprocess.run(
-        ["bash", str(plugin.root / "bin" / "memsearch"), "--sync"],
+        ["bash", str(plugin.root / "bin" / "memsearch-mini"), "--sync"],
         capture_output=True,
         text=True,
         env=plugin.env,
@@ -614,14 +614,14 @@ def test_bin_memsearch_sync_flag_is_blocking(plugin: Plugin) -> None:
 
     assert result.returncode == 0
     assert "runtime ready" in result.stdout
-    assert (plugin.venv / "bin" / "memsearch").exists()
-    assert (plugin.venv / ".memsearch-synced").exists()
+    assert (plugin.venv / "bin" / "memsearch-mini").exists()
+    assert (plugin.venv / ".memsearch-mini-synced").exists()
     assert plugin.cli_calls() == []
 
 
-def test_bin_memsearch_sync_failure_points_at_the_log(plugin: Plugin) -> None:
+def test_bin_memsearch_mini_sync_failure_points_at_the_log(plugin: Plugin) -> None:
     result = subprocess.run(
-        ["bash", str(plugin.root / "bin" / "memsearch"), "--sync"],
+        ["bash", str(plugin.root / "bin" / "memsearch-mini"), "--sync"],
         capture_output=True,
         text=True,
         env={**plugin.env, "FAKE_SYNC_RC": "2"},
@@ -633,9 +633,9 @@ def test_bin_memsearch_sync_failure_points_at_the_log(plugin: Plugin) -> None:
     assert str(plugin.sync_log) in result.stderr
 
 
-def test_bin_memsearch_without_uv_exits_one(plugin: Plugin) -> None:
+def test_bin_memsearch_mini_without_uv_exits_one(plugin: Plugin) -> None:
     result = subprocess.run(
-        ["bash", str(plugin.root / "bin" / "memsearch"), "--version"],
+        ["bash", str(plugin.root / "bin" / "memsearch-mini"), "--version"],
         capture_output=True,
         text=True,
         env={**plugin.env, "PATH": "/usr/bin:/bin"},
@@ -647,12 +647,12 @@ def test_bin_memsearch_without_uv_exits_one(plugin: Plugin) -> None:
     assert "uv not found" in result.stderr
 
 
-def test_symlinked_bin_memsearch_resolves_the_plugin_root(plugin: Plugin, tmp_path: Path) -> None:
+def test_symlinked_bin_memsearch_mini_resolves_the_plugin_root(plugin: Plugin, tmp_path: Path) -> None:
     plugin.mark_ready()
     link_dir = tmp_path / "elsewhere"
     link_dir.mkdir()
-    link = link_dir / "memsearch"
-    link.symlink_to(plugin.root / "bin" / "memsearch")
+    link = link_dir / "memsearch-mini"
+    link.symlink_to(plugin.root / "bin" / "memsearch-mini")
 
     result = subprocess.run(
         ["bash", str(link), "stats"],
@@ -668,17 +668,17 @@ def test_symlinked_bin_memsearch_resolves_the_plugin_root(plugin: Plugin, tmp_pa
     assert plugin.cli_calls() == ["stats"]
 
 
-def test_bin_memsearch_exports_the_plugin_root(plugin: Plugin) -> None:
+def test_bin_memsearch_mini_exports_the_plugin_root(plugin: Plugin) -> None:
     plugin.mark_ready()
-    probe = plugin.venv / "bin" / "memsearch"
+    probe = plugin.venv / "bin" / "memsearch-mini"
     probe.write_text(
-        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$MEMSEARCH_PLUGIN_ROOT" > "$FAKE_MEMSEARCH_LOG"\n',
+        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$MEMSEARCH_MINI_PLUGIN_ROOT" > "$FAKE_MEMSEARCH_MINI_LOG"\n',
         encoding="utf-8",
     )
     probe.chmod(0o755)
 
     subprocess.run(
-        ["bash", str(plugin.root / "bin" / "memsearch"), "stats"],
+        ["bash", str(plugin.root / "bin" / "memsearch-mini"), "stats"],
         capture_output=True,
         text=True,
         env=plugin.env,
@@ -700,7 +700,7 @@ def snapshot(root: Path) -> dict[str, tuple[int, int]]:
     }
 
 
-def test_default_environment_lives_under_memsearch_home(plugin: Plugin) -> None:
+def test_default_environment_lives_under_memsearch_mini_home(plugin: Plugin) -> None:
     result = plugin.bash(
         'printf "%s\\n%s\\n" "$VENV" "$UV_PROJECT_ENVIRONMENT"',
         drop_env=("UV_PROJECT_ENVIRONMENT",),
@@ -714,19 +714,19 @@ def test_default_environment_lives_under_memsearch_home(plugin: Plugin) -> None:
     assert str(plugin.root) not in venv
 
 
-def test_default_memsearch_home_is_dot_memsearch_in_home(plugin: Plugin) -> None:
-    result = plugin.bash('printf "%s\\n" "$MEMSEARCH_HOME"', drop_env=("MEMSEARCH_HOME",))
+def test_default_memsearch_mini_home_is_dot_memsearch_mini_in_home(plugin: Plugin) -> None:
+    result = plugin.bash('printf "%s\\n" "$MEMSEARCH_MINI_HOME"', drop_env=("MEMSEARCH_MINI_HOME",))
 
-    assert result.stdout.strip() == str(plugin.home / ".memsearch")
+    assert result.stdout.strip() == str(plugin.home / ".memsearch-mini")
 
 
-def test_caches_are_redirected_into_memsearch_home(plugin: Plugin) -> None:
+def test_caches_are_redirected_into_memsearch_mini_home(plugin: Plugin) -> None:
     plugin.mark_ready()
 
     plugin.run("session-start.sh", "claude", stdin="{}")
 
     seen = plugin.uv_env()
-    assert seen["MEMSEARCH_HOME"] == str(plugin.ms_home)
+    assert seen["MEMSEARCH_MINI_HOME"] == str(plugin.ms_home)
     assert seen["UV_CACHE_DIR"] == str(plugin.ms_home / "uv-cache")
     assert seen["UV_PYTHON_INSTALL_DIR"] == str(plugin.ms_home / "python")
     assert seen["HF_HOME"] == str(plugin.ms_home / "models")
@@ -750,12 +750,12 @@ def test_user_set_cache_directories_win(plugin: Plugin, tmp_path: Path) -> None:
     assert seen["UV_PYTHON_INSTALL_DIR"] == str(plugin.ms_home / "python")
 
 
-def test_extras_args_reads_config_from_memsearch_home(plugin: Plugin) -> None:
+def test_extras_args_reads_config_from_memsearch_mini_home(plugin: Plugin) -> None:
     config = plugin.ms_home / "config.toml"
     config.parent.mkdir(parents=True, exist_ok=True)
     config.write_text('[embedding]\nprovider = "voyage"\n', encoding="utf-8")
 
-    result = plugin.bash("extras_args", drop_env=("MEMSEARCH_CONFIG",))
+    result = plugin.bash("extras_args", drop_env=("MEMSEARCH_MINI_CONFIG",))
 
     assert result.stdout.strip() == "--extra onnx --extra voyage"
 
@@ -766,9 +766,9 @@ def test_full_install_cycle_leaves_the_checkout_untouched(plugin: Plugin) -> Non
     result = plugin.run("session-start.sh", "claude", stdin="{}", drop_env=("UV_PROJECT_ENVIRONMENT",))
 
     assert INSTALLING in json.loads(result.stdout)["systemMessage"]
-    assert plugin.wait_for(lambda: (plugin.default_venv / "bin" / "memsearch").exists())
+    assert plugin.wait_for(lambda: (plugin.default_venv / "bin" / "memsearch-mini").exists())
     assert plugin.wait_for(lambda: plugin.cli_calls() == ["hook session-start --platform claude"])
-    # The venv, its log and its lock all landed under $MEMSEARCH_HOME.
+    # The venv, its log and its lock all landed under $MEMSEARCH_MINI_HOME.
     assert plugin.default_venv.with_name(plugin.default_venv.name + ".log").is_file()
     assert snapshot(plugin.root) == before
 
@@ -787,7 +787,7 @@ def test_ready_launcher_writes_nothing_into_the_checkout(plugin: Plugin, script:
 
 
 def test_sync_writes_the_extras_into_the_stamp(plugin: Plugin) -> None:
-    Path(plugin.env["MEMSEARCH_CONFIG"]).write_text('[embedding]\nprovider = "jina"\n', encoding="utf-8")
+    Path(plugin.env["MEMSEARCH_MINI_CONFIG"]).write_text('[embedding]\nprovider = "jina"\n', encoding="utf-8")
 
     result = plugin.bash("sync_now; echo rc=$?")
 
@@ -798,7 +798,7 @@ def test_sync_writes_the_extras_into_the_stamp(plugin: Plugin) -> None:
 
 def test_changing_the_provider_makes_the_runtime_not_ready(plugin: Plugin) -> None:
     plugin.mark_ready()  # built with --extra onnx
-    Path(plugin.env["MEMSEARCH_CONFIG"]).write_text('[embedding]\nprovider = "openai"\n', encoding="utf-8")
+    Path(plugin.env["MEMSEARCH_MINI_CONFIG"]).write_text('[embedding]\nprovider = "openai"\n', encoding="utf-8")
 
     result = plugin.run("session-start.sh", "claude", stdin="{}")
 
@@ -810,7 +810,7 @@ def test_changing_the_provider_makes_the_runtime_not_ready(plugin: Plugin) -> No
 
 def test_a_stamp_that_matches_the_config_stays_ready(plugin: Plugin) -> None:
     plugin.mark_ready(extras="--extra onnx --extra openai")
-    Path(plugin.env["MEMSEARCH_CONFIG"]).write_text('[embedding]\nprovider = "openai"\n', encoding="utf-8")
+    Path(plugin.env["MEMSEARCH_MINI_CONFIG"]).write_text('[embedding]\nprovider = "openai"\n', encoding="utf-8")
 
     result = plugin.run("session-start.sh", "claude", stdin="{}")
 
@@ -819,12 +819,12 @@ def test_a_stamp_that_matches_the_config_stays_ready(plugin: Plugin) -> None:
     assert plugin.sync_calls() == []
 
 
-def test_bin_memsearch_resyncs_inline_after_a_provider_change(plugin: Plugin) -> None:
+def test_bin_memsearch_mini_resyncs_inline_after_a_provider_change(plugin: Plugin) -> None:
     plugin.mark_ready()
-    Path(plugin.env["MEMSEARCH_CONFIG"]).write_text('[embedding]\nprovider = "mistral"\n', encoding="utf-8")
+    Path(plugin.env["MEMSEARCH_MINI_CONFIG"]).write_text('[embedding]\nprovider = "mistral"\n', encoding="utf-8")
 
     result = subprocess.run(
-        ["bash", str(plugin.root / "bin" / "memsearch"), "stats"],
+        ["bash", str(plugin.root / "bin" / "memsearch-mini"), "stats"],
         capture_output=True,
         text=True,
         env=plugin.env,

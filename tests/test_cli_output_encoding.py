@@ -19,7 +19,7 @@ import click
 import pytest
 from click.testing import CliRunner
 
-from memsearch import cli as cli_module
+from memsearch_mini import cli as cli_module
 
 
 @pytest.mark.parametrize(
@@ -49,7 +49,7 @@ def test_cli_reconfigures_streams_before_root_eager_exits(monkeypatch, args) -> 
     monkeypatch.setattr(sys, "stderr", stderr)
 
     with suppress(click.UsageError):
-        cli_module.cli.main(args=args, prog_name="memsearch", standalone_mode=False)
+        cli_module.cli.main(args=args, prog_name="memsearch-mini", standalone_mode=False)
 
     assert stdout.encoding.lower().replace("_", "-") == "utf-8"
     assert stderr.encoding.lower().replace("_", "-") == "utf-8"
@@ -124,7 +124,7 @@ def test_import_does_not_reconfigure_streams() -> None:
         [
             sys.executable,
             "-c",
-            ("import sys; before = sys.stdout.encoding; import memsearch.cli; print(before, sys.stdout.encoding)"),
+            ("import sys; before = sys.stdout.encoding; import memsearch_mini.cli; print(before, sys.stdout.encoding)"),
         ],
         env={
             **os.environ,
@@ -142,11 +142,11 @@ def test_redirected_output_survives_a_legacy_code_page(tmp_path) -> None:
     config_file.write_text('[embedding]\nmodel = "amyloid-β-embed"\n', encoding="utf-8")
 
     proc = subprocess.run(
-        [sys.executable, "-m", "memsearch", "config", "list", "--json"],
+        [sys.executable, "-m", "memsearch_mini", "config", "list", "--json"],
         cwd=tmp_path,
         env={
             **os.environ,
-            "MEMSEARCH_CONFIG": str(config_file),
+            "MEMSEARCH_MINI_CONFIG": str(config_file),
             "PYTHONIOENCODING": "cp1252",
         },
         capture_output=True,
@@ -163,9 +163,9 @@ def test_config_list_keeps_non_ascii_unescaped(tmp_path) -> None:
     config_file.write_text('[prompts]\nsummarize = "/notes/非拉丁字符.txt"\n', encoding="utf-8")
 
     proc = subprocess.run(
-        [sys.executable, "-m", "memsearch", "config", "list"],
+        [sys.executable, "-m", "memsearch_mini", "config", "list"],
         cwd=tmp_path,
-        env={**os.environ, "MEMSEARCH_CONFIG": str(config_file), "PYTHONIOENCODING": "cp1252"},
+        env={**os.environ, "MEMSEARCH_MINI_CONFIG": str(config_file), "PYTHONIOENCODING": "cp1252"},
         capture_output=True,
     )
 

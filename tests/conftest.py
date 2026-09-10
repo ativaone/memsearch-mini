@@ -1,7 +1,7 @@
 """Shared fixtures.
 
-Every test runs with ``HOME``, ``MEMSEARCH_CONFIG`` and ``TMPDIR`` pointed inside
-``tmp_path``, so no test can read or write the developer's real ``~/.memsearch``.
+Every test runs with ``HOME``, ``MEMSEARCH_MINI_CONFIG`` and ``TMPDIR`` pointed inside
+``tmp_path``, so no test can read or write the developer's real ``~/.memsearch-mini``.
 The store-related environment switches are cleared for the same reason: a value
 left over in the shell must never change what the suite exercises.
 """
@@ -12,19 +12,19 @@ import hashlib
 
 import pytest
 
-_ENV_SWITCHES = ("MEMSEARCH_NO_FTS", "MEMSEARCH_MAX_FILE_MB", "MEMSEARCH_DISABLE", "MEMSEARCH_DIR")
+_ENV_SWITCHES = ("MEMSEARCH_MINI_NO_FTS", "MEMSEARCH_MINI_MAX_FILE_MB", "MEMSEARCH_MINI_DISABLE", "MEMSEARCH_MINI_DIR")
 
 
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path, monkeypatch):
     """Point every ``~`` lookup at a throwaway directory."""
     home = tmp_path / "home"
-    (home / ".memsearch").mkdir(parents=True, exist_ok=True)
+    (home / ".memsearch-mini").mkdir(parents=True, exist_ok=True)
     (tmp_path / "tmp").mkdir(exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("TMPDIR", str(tmp_path / "tmp"))
-    monkeypatch.setenv("MEMSEARCH_CONFIG", str(home / ".memsearch" / "config.toml"))
+    monkeypatch.setenv("MEMSEARCH_MINI_CONFIG", str(home / ".memsearch-mini" / "config.toml"))
     for name in _ENV_SWITCHES:
         monkeypatch.delenv(name, raising=False)
     return home

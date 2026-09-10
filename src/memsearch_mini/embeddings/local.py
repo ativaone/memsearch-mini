@@ -1,6 +1,6 @@
 """Local embedding via sentence-transformers (runs on CPU/GPU).
 
-Requires: ``pip install 'memsearch[local]'`` or ``uv add 'memsearch[local]'``
+Requires: ``pip install 'memsearch-mini[local]'`` or ``uv add 'memsearch-mini[local]'``
 No API key needed.
 """
 

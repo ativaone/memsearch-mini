@@ -1,4 +1,4 @@
-"""The ``memsearch hook`` commands: everything Claude Code and Codex invoke.
+"""The ``memsearch-mini hook`` commands: everything Claude Code and Codex invoke.
 
 Deliberately dependency-light: the index is inspected with the stdlib
 ``sqlite3`` only, so no hook ever imports the store, numpy or an embedding
@@ -35,7 +35,7 @@ _DAILY_JOURNAL = re.compile(r"^\d{4}-\d{2}-\d{2}(-[A-Za-z0-9_-]+)?\.md$")  # opt
 _H2 = re.compile(r"^##\s")
 _H34 = re.compile(r"^#{3,4}\s")
 _BULLET = re.compile(r"^-\s")
-_KEY_TIP = "Tip: memsearch config set embedding.provider onnx"
+_KEY_TIP = "Tip: memsearch-mini config set embedding.provider onnx"
 _ONNX_TIP = "Tip: uv sync --extra onnx"
 
 
@@ -114,25 +114,25 @@ def _git(cwd: Path, *args: str) -> str:
     return proc.stdout.decode("utf-8", errors="replace").strip() if proc.returncode == 0 else ""
 
 
-def memsearch_dir(project_dir: str | os.PathLike[str]) -> Path:
-    override = os.environ.get("MEMSEARCH_DIR")
-    return Path(override).expanduser() if override else Path(project_dir) / ".memsearch"
+def memsearch_mini_dir(project_dir: str | os.PathLike[str]) -> Path:
+    override = os.environ.get("MEMSEARCH_MINI_DIR")
+    return Path(override).expanduser() if override else Path(project_dir) / ".memsearch-mini"
 
 
 def memory_dir(project_dir: str | os.PathLike[str]) -> Path:
-    return memsearch_dir(project_dir) / "memory"
+    return memsearch_mini_dir(project_dir) / "memory"
 
 
 def _index_argv(memory: str | os.PathLike[str]) -> list[str]:
-    return [sys.executable, "-m", "memsearch", "index", str(memory), "--skip-if-locked"]
+    return [sys.executable, "-m", "memsearch_mini", "index", str(memory), "--skip-if-locked"]
 
 
 def _reindex_env() -> dict[str, str]:
-    return {**os.environ, "MEMSEARCH_DISABLE": "1"}
+    return {**os.environ, "MEMSEARCH_MINI_DISABLE": "1"}
 
 
 def _index_log():
-    """Where background indexers write: ``$MEMSEARCH_HOME/index.log`` (a plain file,
+    """Where background indexers write: ``$MEMSEARCH_MINI_HOME/index.log`` (a plain file,
     never the hook's own stdout/stderr pipe). Truncated once it passes 1 MB."""
     try:
         path = config.home_dir() / "index.log"
@@ -169,7 +169,7 @@ def _run_index(memory: str | os.PathLike[str], cwd: str | os.PathLike[str]) -> N
 # The Claude Stop hook is async and can take up to 110 s (``claude -p``). Quit the host in
 # that window — or run it under a wrapper that kills the whole process tree on exit — and the
 # turn is lost without a trace. So the hook records *where* the turn is (transcript path,
-# turn uuid, timestamp; never its content) in ``<project>/.memsearch/pending/`` before it
+# turn uuid, timestamp; never its content) in ``<project>/.memsearch-mini/pending/`` before it
 # starts summarizing, and deletes the record once the journal is written. A record still
 # there after the hook's 120 s timeout belongs to a dead hook: the next SessionStart or Stop
 # in that project hands it to a detached ``hook recover``, which re-reads the turn from the
@@ -181,7 +181,7 @@ _UNSAFE_NAME = re.compile(r"[^A-Za-z0-9_-]")
 
 
 def pending_dir(project_dir: str | os.PathLike[str]) -> Path:
-    return memsearch_dir(project_dir) / "pending"
+    return memsearch_mini_dir(project_dir) / "pending"
 
 
 def _pending_write(project_dir: Path, turn, now: datetime) -> Path | None:
@@ -246,9 +246,9 @@ def _sweep_pending(project_dir: Path) -> str:
     stale = _stale_pending(directory)
     if stale:
         _spawn_detached(
-            [sys.executable, "-m", "memsearch", "hook", "recover", str(project_dir)],
+            [sys.executable, "-m", "memsearch_mini", "hook", "recover", str(project_dir)],
             project_dir,
-            {**os.environ, "MEMSEARCH_IN_STOP_WORKER": "1"},
+            {**os.environ, "MEMSEARCH_MINI_IN_STOP_WORKER": "1"},
         )
         return f"recovering {len(stale)} earlier turn(s) in the background"
     try:
@@ -391,7 +391,7 @@ def _emit(payload: dict) -> None:
 
 
 def _disabled() -> bool:
-    return os.environ.get("MEMSEARCH_DISABLE") == "1"
+    return os.environ.get("MEMSEARCH_MINI_DISABLE") == "1"
 
 
 def _safe(func):
@@ -456,7 +456,7 @@ def session_start(platform: str) -> None:
         except OSError:
             traceback.print_exc(file=sys.stderr)
     cfg = config.load()
-    status = f"[memsearch v{_version()}] embedding: {cfg.embedding.provider}/{cfg.effective_model() or 'unknown'}"
+    status = f"[memsearch-mini v{_version()}] embedding: {cfg.embedding.provider}/{cfg.effective_model() or 'unknown'}"
     try:
         memory.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -465,7 +465,7 @@ def session_start(platform: str) -> None:
     if problem:  # search and indexing would fail: no reindex, no injection
         _emit({"systemMessage": status + problem})
         return
-    index_status, stale = _index_state(memsearch_dir(project_dir) / "index.db", memory)
+    index_status, stale = _index_state(memsearch_mini_dir(project_dir) / "index.db", memory)
     status += f" | index: {index_status} | memory: {memory}"
     if stale:
         _spawn_detached(_index_argv(memory), project_dir, _reindex_env())
@@ -510,7 +510,7 @@ def _summarize_and_append(cfg, platform: str, turn, memory: Path, project_dir: P
 @_safe
 def stop(platform: str) -> None:
     """Summarize the last turn and append it to today's journal."""
-    if _disabled() or (platform == "codex" and os.environ.get("MEMSEARCH_IN_STOP_WORKER")):
+    if _disabled() or (platform == "codex" and os.environ.get("MEMSEARCH_MINI_IN_STOP_WORKER")):
         _emit({})
         return
     payload = read_payload()
@@ -551,7 +551,11 @@ def stop(platform: str) -> None:
     _pending_discard(pending)
     _spawn_detached(_index_argv(memory), project_dir, _reindex_env())
     # The host shows systemMessage once this async hook completes: a quiet "safe to quit now".
-    message = "[memsearch] turn captured" if not reason else f"[memsearch] turn recorded without a summary ({reason})"
+    message = (
+        "[memsearch-mini] turn captured"
+        if not reason
+        else f"[memsearch-mini] turn recorded without a summary ({reason})"
+    )
     recovery = _sweep_pending(project_dir)
     if recovery:
         message += f" | {recovery}"
@@ -571,15 +575,15 @@ def _codex_handoff(turn, memory: Path, project_dir: Path) -> None:
         "user_question": turn.user_question,
         "last_message": turn.last_message,
     }
-    fd, name = tempfile.mkstemp(prefix="memsearch-stop.", suffix=".json")
+    fd, name = tempfile.mkstemp(prefix="memsearch-mini-stop.", suffix=".json")
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump(work, handle)
     _emit({})
     sys.stdout.flush()
     _spawn_detached(
-        [sys.executable, "-m", "memsearch", "hook", "stop-worker", name],
+        [sys.executable, "-m", "memsearch_mini", "hook", "stop-worker", name],
         project_dir,
-        {**os.environ, "MEMSEARCH_IN_STOP_WORKER": "1"},
+        {**os.environ, "MEMSEARCH_MINI_IN_STOP_WORKER": "1"},
     )
 
 
@@ -653,4 +657,4 @@ def recover(project_dir: str) -> None:
             _pending_discard(claimed)
     if recovered:
         _run_index(memory, project)
-    _emit({"systemMessage": f"[memsearch] recovered {recovered} turn(s)"})  # lands in index.log
+    _emit({"systemMessage": f"[memsearch-mini] recovered {recovered} turn(s)"})  # lands in index.log

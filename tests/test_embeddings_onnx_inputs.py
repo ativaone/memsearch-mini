@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from memsearch.embeddings.onnx import OnnxEmbedding, _select_providers
+from memsearch_mini.embeddings.onnx import OnnxEmbedding, _select_providers
 
 
 class _StubEncoding:

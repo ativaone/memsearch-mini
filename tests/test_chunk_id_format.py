@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 
-from memsearch.chunker import Chunk, compute_chunk_id
+from memsearch_mini.chunker import Chunk, compute_chunk_id
 
 
 def test_chunk_id_is_the_documented_sha256_prefix():

@@ -1,5 +1,5 @@
 {
-  "description": "memsearch memory hooks — session context, recall hint, turn capture",
+  "description": "memsearch-mini memory hooks — session context, recall hint, turn capture",
   "hooks": {
     "SessionStart": [
       {

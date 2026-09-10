@@ -1,5 +1,5 @@
-"""Tests for memsearch.capture — the transcript parsers, the summarizer call and
-the journal writer. Every test is hermetic: HOME, MEMSEARCH_CONFIG and TMPDIR
+"""Tests for memsearch_mini.capture — the transcript parsers, the summarizer call and
+the journal writer. Every test is hermetic: HOME, MEMSEARCH_MINI_CONFIG and TMPDIR
 point into tmp_path, and the summarizers are fake shell scripts on PATH."""
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from memsearch import capture, config
+from memsearch_mini import capture, config
 
 NOW = datetime(2026, 7, 23, 12, 34, 56)
 
@@ -22,14 +22,14 @@ def _isolate(tmp_path, monkeypatch):
     home.mkdir(exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("TMPDIR", str(tmp_path))
-    monkeypatch.setenv("MEMSEARCH_CONFIG", str(tmp_path / "config.toml"))
+    monkeypatch.setenv("MEMSEARCH_MINI_CONFIG", str(tmp_path / "config.toml"))
     for name in (
-        "MEMSEARCH_DIR",
+        "MEMSEARCH_MINI_DIR",
         "CLAUDE_PROJECT_DIR",
-        "MEMSEARCH_DISABLE",
-        "MEMSEARCH_IN_STOP_WORKER",
-        "MEMSEARCH_PLUGIN_ROOT",
-        "MEMSEARCH_SUMMARY_MAX_CHARS",
+        "MEMSEARCH_MINI_DISABLE",
+        "MEMSEARCH_MINI_IN_STOP_WORKER",
+        "MEMSEARCH_MINI_PLUGIN_ROOT",
+        "MEMSEARCH_MINI_SUMMARY_MAX_CHARS",
         "CODEX_HOME",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -50,13 +50,13 @@ def _fake_bin(tmp_path, monkeypatch, name: str, body: str) -> Path:
     script.write_text("#!/usr/bin/env bash\n" + body, encoding="utf-8")
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.setenv("MEMSEARCH_TEST_LOG", str(tmp_path / "log"))
+    monkeypatch.setenv("MEMSEARCH_MINI_TEST_LOG", str(tmp_path / "log"))
     (tmp_path / "log").mkdir(exist_ok=True)
     return script
 
 
 CLAUDE_RECORDER = """
-LOG="$MEMSEARCH_TEST_LOG"
+LOG="$MEMSEARCH_MINI_TEST_LOG"
 if [ "${1:-}" = "--help" ]; then
   echo x >> "$LOG/help.calls"
   echo "Usage: claude [options]"
@@ -315,7 +315,7 @@ def test_codex_truncates_the_last_message_and_the_content(tmp_path, monkeypatch)
 
     assert turn.last_message == "y" * 4000 + "...(truncated)"
 
-    monkeypatch.setenv("MEMSEARCH_SUMMARY_MAX_CHARS", "120")
+    monkeypatch.setenv("MEMSEARCH_MINI_SUMMARY_MAX_CHARS", "120")
     capped = capture.extract_last_turn("", "codex", session_id="s", last_assistant_message="z" * 5000)
 
     assert capped.text.endswith("...(truncated)")
@@ -356,7 +356,7 @@ def test_summarize_claude_argv_stdin_and_env(tmp_path, monkeypatch):
     ]
     assert _log(tmp_path, "stdin.txt") == "PROMPT_BODY\n\nTranscript:\nTRANSCRIPT_BODY"
     env = dict(line.split("=", 1) for line in _log(tmp_path, "env.txt").splitlines() if "=" in line)
-    assert env["MEMSEARCH_DISABLE"] == "1"
+    assert env["MEMSEARCH_MINI_DISABLE"] == "1"
     assert env["CLAUDECODE"] == ""
 
 
@@ -429,7 +429,7 @@ def test_summarize_codex_argv_and_env(tmp_path, monkeypatch):
         tmp_path,
         monkeypatch,
         "codex",
-        'LOG="$MEMSEARCH_TEST_LOG"\nprintf \'%s\\0\' "$@" > "$LOG/argv.bin"\nenv > "$LOG/env.txt"\n'
+        'LOG="$MEMSEARCH_MINI_TEST_LOG"\nprintf \'%s\\0\' "$@" > "$LOG/argv.bin"\nenv > "$LOG/env.txt"\n'
         'echo "- Codex noted the outcome."\n',
     )
 
@@ -453,8 +453,8 @@ def test_summarize_codex_argv_and_env(tmp_path, monkeypatch):
         "PROMPT_BODY\n\nHere is the transcript:\n\nTRANSCRIPT_BODY",
     ]
     env = dict(line.split("=", 1) for line in _log(tmp_path, "env.txt").splitlines() if "=" in line)
-    assert env["MEMSEARCH_DISABLE"] == "1"
-    assert env["MEMSEARCH_IN_STOP_WORKER"] == "1"
+    assert env["MEMSEARCH_MINI_DISABLE"] == "1"
+    assert env["MEMSEARCH_MINI_IN_STOP_WORKER"] == "1"
 
 
 # --- fallbacks and prompts ---------------------------------------------------
@@ -486,7 +486,7 @@ def test_load_prompt_precedence(tmp_path, monkeypatch):
 
     assert capture.load_prompt(cfg, "claude", project) == capture.FALLBACK_PROMPT
 
-    monkeypatch.setenv("MEMSEARCH_PLUGIN_ROOT", str(plugin_root))
+    monkeypatch.setenv("MEMSEARCH_MINI_PLUGIN_ROOT", str(plugin_root))
     assert capture.load_prompt(cfg, "claude", project) == "PLUGIN Claude Code template"
     assert capture.load_prompt(cfg, "codex", project) == "PLUGIN Codex template"
 
@@ -501,7 +501,7 @@ def test_load_prompt_precedence(tmp_path, monkeypatch):
 
 
 def test_load_prompt_uses_the_repository_template(tmp_path, monkeypatch):
-    monkeypatch.setenv("MEMSEARCH_PLUGIN_ROOT", str(Path(__file__).resolve().parent.parent))
+    monkeypatch.setenv("MEMSEARCH_MINI_PLUGIN_ROOT", str(Path(__file__).resolve().parent.parent))
 
     prompt = capture.load_prompt(config.Config(), "codex", tmp_path)
 
@@ -618,7 +618,7 @@ def test_journal_creates_the_memory_directory(tmp_path):
 
 def test_journal_suffix_is_empty_by_default_and_uses_the_short_hostname(monkeypatch):
     """Upstream #720: two machines sharing one synced memory folder must not overwrite each other."""
-    from memsearch import config
+    from memsearch_mini import config
 
     cfg = config.Config()
     assert capture.journal_suffix(cfg) == ""

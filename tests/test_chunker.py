@@ -1,6 +1,6 @@
 """Tests for the markdown chunker."""
 
-from memsearch.chunker import chunk_markdown, clean_content_for_embedding
+from memsearch_mini.chunker import chunk_markdown, clean_content_for_embedding
 
 
 def test_simple_heading_split():
@@ -201,7 +201,7 @@ def test_ascii_dot_in_engineering_text_is_not_a_boundary() -> None:
         "user@example.com",
         "https://foo.bar/baz",
         "path/to/file.py",
-        "memsearch.config.toml",
+        "memsearch-mini.config.toml",
         "v1.2.3",
     ]
     text = " ".join(tokens * 8)

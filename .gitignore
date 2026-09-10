@@ -16,7 +16,7 @@ htmlcov/
 *.db
 
 # Runtime
-.memsearch/
+.memsearch-mini/
 CONTEXT.md
 CLAUDE.local.md
 AGENTS.local.md

@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // The catalog is project state, kept outside the skill directory: <repo>/.claude/upstream-sync/.
-const CATALOG = process.env.MEMSEARCH_UPSTREAM_CATALOG || join(HERE, "..", "..", "upstream-sync");
+const CATALOG = process.env.MEMSEARCH_MINI_UPSTREAM_CATALOG || join(HERE, "..", "..", "upstream-sync");
 const STATE = join(CATALOG, "state.json");
 const ENTRIES = join(CATALOG, "entries.jsonl");
 const VERDICTS = ["applied", "already-covered", "not-applicable", "rejected", "ask-user", "deferred", "superseded"];

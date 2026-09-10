@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from memsearch.embeddings.utils import batched_embed
-from memsearch.store import Store, index_paths
+from memsearch_mini.embeddings.utils import batched_embed
+from memsearch_mini.store import Store, index_paths
 
 # -- batched_embed ---------------------------------------------------------------
 

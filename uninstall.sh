@@ -2,13 +2,13 @@
 # memsearch-mini uninstaller.
 #
 #   bash uninstall.sh            unwire the hooks, keep the runtime home
-#   bash uninstall.sh --purge    also delete $MEMSEARCH_HOME (default ~/.memsearch)
+#   bash uninstall.sh --purge    also delete $MEMSEARCH_MINI_HOME (default ~/.memsearch-mini)
 #
 # Never `set -e`: every step reports what it did and the next one still runs.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-MEMSEARCH_HOME="${MEMSEARCH_HOME:-$HOME/.memsearch}"
+MEMSEARCH_MINI_HOME="${MEMSEARCH_MINI_HOME:-$HOME/.memsearch-mini}"
 CODEX_HOOKS="$HOME/.codex/hooks.json"
 CODEX_CONFIG="$HOME/.codex/config.toml"
 SKILL_DIR="$HOME/.agents/skills/memory-recall"
@@ -89,7 +89,7 @@ else:
     raise SystemExit(0)
 
 if not removed:
-    print("  · no memsearch entries in hooks.json")
+    print("  · no memsearch-mini entries in hooks.json")
     raise SystemExit(0)
 
 tmp = path.with_name(path.name + ".tmp")
@@ -103,7 +103,7 @@ PY
 
 echo "=== memsearch-mini uninstaller ==="
 echo "Checkout:     $ROOT"
-echo "Runtime home: $MEMSEARCH_HOME"
+echo "Runtime home: $MEMSEARCH_MINI_HOME"
 echo ""
 
 echo "[1/4] Codex hook entries..."
@@ -115,10 +115,10 @@ fi
 echo "  · [features] hooks in $CODEX_CONFIG left as it is: other tools may rely on it"
 
 echo "[2/4] Codex skill..."
-if [ -f "$SKILL_DIR/SKILL.md" ] && grep -q "bin/memsearch" "$SKILL_DIR/SKILL.md" 2>/dev/null; then
+if [ -f "$SKILL_DIR/SKILL.md" ] && grep -q "bin/memsearch-mini" "$SKILL_DIR/SKILL.md" 2>/dev/null; then
   rm -rf "$SKILL_DIR" && echo "  ✓ removed $SKILL_DIR"
 elif [ -e "$SKILL_DIR" ]; then
-  echo "  ⚠ $SKILL_DIR is not a memsearch skill — left untouched"
+  echo "  ⚠ $SKILL_DIR is not a memsearch-mini skill — left untouched"
 else
   echo "  · no skill installed at $SKILL_DIR"
 fi
@@ -128,24 +128,24 @@ echo "    /plugin uninstall memsearch-mini@ativaone"
 echo "    /plugin marketplace remove ativaone"
 
 echo "[4/4] Runtime home..."
-if [ -d "$MEMSEARCH_HOME" ]; then
-  MS_SIZE="$(du -sh "$MEMSEARCH_HOME" 2>/dev/null | cut -f1)"
-  echo "  $MEMSEARCH_HOME holds ${MS_SIZE:-?} — venvs, uv cache, embedding models, python, config.toml"
+if [ -d "$MEMSEARCH_MINI_HOME" ]; then
+  MS_SIZE="$(du -sh "$MEMSEARCH_MINI_HOME" 2>/dev/null | cut -f1)"
+  echo "  $MEMSEARCH_MINI_HOME holds ${MS_SIZE:-?} — venvs, uv cache, embedding models, python, config.toml"
   if [ "$PURGE" = "1" ]; then
-    if rm -rf "$MEMSEARCH_HOME"; then
-      echo "  ✓ removed $MEMSEARCH_HOME"
+    if rm -rf "$MEMSEARCH_MINI_HOME"; then
+      echo "  ✓ removed $MEMSEARCH_MINI_HOME"
     else
-      echo "  ✗ could not remove $MEMSEARCH_HOME"
+      echo "  ✗ could not remove $MEMSEARCH_MINI_HOME"
     fi
   else
     echo "  · kept. To reclaim it later (this also deletes config.toml):"
-    echo "      rm -rf $MEMSEARCH_HOME"
+    echo "      rm -rf $MEMSEARCH_MINI_HOME"
   fi
 else
-  echo "  · $MEMSEARCH_HOME does not exist"
+  echo "  · $MEMSEARCH_MINI_HOME does not exist"
 fi
 
 echo ""
-echo "Project journals are never touched: <project>/.memsearch/memory/*.md stays."
+echo "Project journals are never touched: <project>/.memsearch-mini/memory/*.md stays."
 echo "To drop one project's derived index:"
-echo "  rm -f <project>/.memsearch/index.db <project>/.memsearch/index.db-wal <project>/.memsearch/index.db-shm <project>/.memsearch/index.lock"
+echo "  rm -f <project>/.memsearch-mini/index.db <project>/.memsearch-mini/index.db-wal <project>/.memsearch-mini/index.db-shm <project>/.memsearch-mini/index.lock"

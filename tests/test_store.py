@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from memsearch.store import (
+from memsearch_mini.store import (
     RRF_K,
     SCHEMA_VERSION,
     ChunkRecord,
@@ -288,7 +288,7 @@ def test_pathological_queries_never_raise(store, query):
 
 
 def test_no_fts_environment_switch_degrades_to_dense_only(tmp_path, monkeypatch):
-    monkeypatch.setenv("MEMSEARCH_NO_FTS", "1")
+    monkeypatch.setenv("MEMSEARCH_MINI_NO_FTS", "1")
     with _open(tmp_path / "index.db", allow_rebuild=True) as opened:
         assert opened.fts_enabled is False
         opened.upsert([_rec("c1", E0, content="alpha"), _rec("c2", E1, content="beta")])
@@ -317,12 +317,12 @@ def _detached(tmp_path, message: str = "no such module: fts5", *, table_exists: 
 
 def test_reopening_with_fts_backfills_a_database_indexed_without_it(tmp_path, monkeypatch):
     path = tmp_path / "index.db"
-    monkeypatch.setenv("MEMSEARCH_NO_FTS", "1")
+    monkeypatch.setenv("MEMSEARCH_MINI_NO_FTS", "1")
     with _open(path, allow_rebuild=True) as opened:
         opened.upsert([_rec("c1", E0, content="alpha unique"), _rec("c2", E1, content="beta")])
         assert not opened._table_exists("chunks_fts")
 
-    monkeypatch.delenv("MEMSEARCH_NO_FTS")
+    monkeypatch.delenv("MEMSEARCH_MINI_NO_FTS")
     with Store.open(path) as reopened:
         assert reopened.fts_enabled is True
         assert _fts_rowids(reopened) == [1, 2]
@@ -330,12 +330,12 @@ def test_reopening_with_fts_backfills_a_database_indexed_without_it(tmp_path, mo
 
 
 def test_creating_the_fts_table_without_fts5_is_reported_clearly(tmp_path):
-    with pytest.raises(StoreError, match="MEMSEARCH_NO_FTS=1"):
+    with pytest.raises(StoreError, match="MEMSEARCH_MINI_NO_FTS=1"):
         _detached(tmp_path)._resolve_fts()
 
 
 def test_probing_an_existing_fts_table_without_fts5_is_reported_clearly(tmp_path):
-    with pytest.raises(StoreError, match="MEMSEARCH_NO_FTS=1"):
+    with pytest.raises(StoreError, match="MEMSEARCH_MINI_NO_FTS=1"):
         _detached(tmp_path, table_exists=True)._resolve_fts()
 
 
@@ -363,7 +363,7 @@ def test_reopening_with_another_model_raises_without_allow_rebuild(tmp_path):
     with pytest.raises(IndexMismatch) as excinfo:
         _open(path, model="other-model")
     assert "fake-embed" in str(excinfo.value)
-    assert "memsearch index --force" in str(excinfo.value)
+    assert "memsearch-mini index --force" in str(excinfo.value)
 
 
 def test_reopening_with_allow_rebuild_empties_the_index_and_updates_meta(tmp_path, capsys):
@@ -470,7 +470,7 @@ def test_a_reader_thread_searches_through_a_long_write_transaction(tmp_path):
 
 _READER_SCRIPT = """
 import json, os, sys, time
-from memsearch.store import Store
+from memsearch_mini.store import Store
 
 db, ready, done = sys.argv[1], sys.argv[2], sys.argv[3]
 searches = 0
@@ -622,14 +622,14 @@ async def test_index_paths_collects_per_file_failures_without_stopping(tmp_path,
     _journal(memory, "aaa.md", "# A\n\n- first note\n")
     _journal(memory, "bbb.md", "# B\n\n- broken note\n")
     _journal(memory, "ccc.md", "# C\n\n- third note\n")
-    real_read = __import__("memsearch.scanner", fromlist=["x"]).read_utf8_text_replace
+    real_read = __import__("memsearch_mini.scanner", fromlist=["x"]).read_utf8_text_replace
 
     def read(path):
         if str(path).endswith("bbb.md"):
             raise OSError("disk gremlin")
         return real_read(path)
 
-    monkeypatch.setattr("memsearch.scanner.read_utf8_text_replace", read)
+    monkeypatch.setattr("memsearch_mini.scanner.read_utf8_text_replace", read)
     with _open(tmp_path / "index.db", model=fake_embedder.model_name, dimension=8, allow_rebuild=True) as opened:
         result = await index_paths(opened, fake_embedder, [memory])
     assert result.total_files == 3
@@ -643,12 +643,12 @@ async def test_index_paths_collects_per_file_failures_without_stopping(tmp_path,
 async def test_index_paths_skips_files_over_the_size_limit(tmp_path, fake_embedder, monkeypatch):
     memory = tmp_path / "memory"
     _journal(memory, "huge.md", "# Huge\n\n" + "- a long note\n" * 500)
-    monkeypatch.setenv("MEMSEARCH_MAX_FILE_MB", "0.001")
+    monkeypatch.setenv("MEMSEARCH_MINI_MAX_FILE_MB", "0.001")
     with _open(tmp_path / "index.db", model=fake_embedder.model_name, dimension=8, allow_rebuild=True) as opened:
         result = await index_paths(opened, fake_embedder, [memory])
         assert opened.count() == 0
     assert len(result.failed_files) == 1
-    assert "MEMSEARCH_MAX_FILE_MB" in result.failed_files[0][1]
+    assert "MEMSEARCH_MINI_MAX_FILE_MB" in result.failed_files[0][1]
 
 
 async def test_index_paths_survives_broken_encoding_and_nul_bytes(tmp_path, fake_embedder):
@@ -679,7 +679,7 @@ async def test_index_paths_marks_the_run_before_doing_the_work(tmp_path, fake_em
     memory = tmp_path / "memory"
     _journal(memory, "log.md", "# Log\n\n- a note\n")
     seen: list[float | None] = []
-    real_scan = __import__("memsearch.scanner", fromlist=["x"]).scan_paths
+    real_scan = __import__("memsearch_mini.scanner", fromlist=["x"]).scan_paths
 
     with _open(tmp_path / "index.db", model=fake_embedder.model_name, dimension=8, allow_rebuild=True) as opened:
 
@@ -687,7 +687,7 @@ async def test_index_paths_marks_the_run_before_doing_the_work(tmp_path, fake_em
             seen.append(opened.last_index_at())
             return real_scan(paths, **kwargs)
 
-        monkeypatch.setattr("memsearch.scanner.scan_paths", scan)
+        monkeypatch.setattr("memsearch_mini.scanner.scan_paths", scan)
         await index_paths(opened, fake_embedder, [memory])
     assert seen and seen[0] is not None
 

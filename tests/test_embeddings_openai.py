@@ -16,7 +16,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture
 def provider():
-    from memsearch.embeddings.openai import OpenAIEmbedding
+    from memsearch_mini.embeddings.openai import OpenAIEmbedding
 
     return OpenAIEmbedding()
 

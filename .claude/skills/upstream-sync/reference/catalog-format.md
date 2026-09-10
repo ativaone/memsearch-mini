@@ -1,7 +1,7 @@
 # Catalog format
 
 Two files in `.claude/upstream-sync/` at the repository root (project state, versioned with the
-repository, deliberately outside the skill directory; `MEMSEARCH_UPSTREAM_CATALOG` overrides the
+repository, deliberately outside the skill directory; `MEMSEARCH_MINI_UPSTREAM_CATALOG` overrides the
 location):
 
 - `state.json` — `upstream` (owner/repo), `fork` (owner/repo of this repository, where issues are

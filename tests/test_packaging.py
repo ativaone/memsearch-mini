@@ -28,7 +28,7 @@ HOOKS_JSON = REPO / "hooks" / "hooks.json"
 CLAUDE_SKILL = REPO / "skills" / "memory-recall" / "SKILL.md"
 CODEX_SKILL = REPO / "codex" / "skills" / "memory-recall" / "SKILL.md"
 LAUNCHERS = ("session-start.sh", "user-prompt-submit.sh", "stop.sh")
-RECALL_HINT = "[memsearch] Recall available if needed"
+RECALL_HINT = "[memsearch-mini] Recall available if needed"
 
 EXPECTED_HOOKS = {
     "SessionStart": ("session-start.sh", 10, False),
@@ -76,8 +76,8 @@ def test_plugin_name_matches_the_marketplace_entry() -> None:
     assert [entry["name"] for entry in _json(MARKETPLACE_JSON)["plugins"]] == ["memsearch-mini"]
 
 
-def test_project_ships_the_memsearch_cli() -> None:
-    assert _pyproject()["project"]["scripts"]["memsearch"] == "memsearch.cli:cli"
+def test_project_ships_the_memsearch_mini_cli() -> None:
+    assert _pyproject()["project"]["scripts"]["memsearch-mini"] == "memsearch_mini.cli:cli"
 
 
 # --- manifests ----------------------------------------------------------------
@@ -128,7 +128,7 @@ def test_no_session_end_hook() -> None:
 
 @pytest.mark.parametrize(
     "relative",
-    ["bin/memsearch", "codex/install.sh", "uninstall.sh", *(f"hooks/{name}" for name in LAUNCHERS)],
+    ["bin/memsearch-mini", "codex/install.sh", "uninstall.sh", *(f"hooks/{name}" for name in LAUNCHERS)],
 )
 def test_scripts_are_executable(relative: str) -> None:
     path = REPO / relative
@@ -206,18 +206,18 @@ def test_skills_share_the_same_description() -> None:
 def test_claude_skill_calls_the_checkout_cli() -> None:
     text = CLAUDE_SKILL.read_text(encoding="utf-8")
 
-    assert '${CLAUDE_PLUGIN_ROOT}/bin/memsearch search "<query>" -k 5 --json' in text
-    assert "${CLAUDE_PLUGIN_ROOT}/bin/memsearch expand <chunk_id> --json" in text
-    assert "${CLAUDE_PLUGIN_ROOT}/bin/memsearch transcript <path> --turn <uuid> --context 3" in text
+    assert '${CLAUDE_PLUGIN_ROOT}/bin/memsearch-mini search "<query>" -k 5 --json' in text
+    assert "${CLAUDE_PLUGIN_ROOT}/bin/memsearch-mini expand <chunk_id> --json" in text
+    assert "${CLAUDE_PLUGIN_ROOT}/bin/memsearch-mini transcript <path> --turn <uuid> --context 3" in text
     assert "No relevant memories found." in text
 
 
 def test_codex_skill_calls_the_installed_checkout() -> None:
     text = CODEX_SKILL.read_text(encoding="utf-8")
 
-    assert '__INSTALL_DIR__/bin/memsearch search "<query>" -k 5 --json' in text
-    assert "__INSTALL_DIR__/bin/memsearch expand <chunk_id> --json" in text
-    assert "__INSTALL_DIR__/bin/memsearch transcript <rollout_path>" in text
+    assert '__INSTALL_DIR__/bin/memsearch-mini search "<query>" -k 5 --json' in text
+    assert "__INSTALL_DIR__/bin/memsearch-mini expand <chunk_id> --json" in text
+    assert "__INSTALL_DIR__/bin/memsearch-mini transcript <rollout_path>" in text
     assert "--turn" not in text  # Codex rollouts have no per-turn uuid anchor
     assert "No relevant memories found." in text
 
@@ -226,7 +226,7 @@ def test_codex_skill_calls_the_installed_checkout() -> None:
 def test_skills_document_the_raw_markdown_fallback(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
 
-    assert 'MDIR="${MEMSEARCH_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.memsearch}"' in text
+    assert 'MDIR="${MEMSEARCH_MINI_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.memsearch-mini}"' in text
     assert "source of truth" in text
 
 
@@ -235,7 +235,7 @@ def test_skills_document_the_raw_markdown_fallback(path: Path) -> None:
 SHELL_AND_SKILL_FILES = [
     REPO / "hooks" / "common.sh",
     *(REPO / "hooks" / name for name in LAUNCHERS),
-    REPO / "bin" / "memsearch",
+    REPO / "bin" / "memsearch-mini",
     REPO / "codex" / "install.sh",
     CLAUDE_SKILL,
     CODEX_SKILL,
@@ -262,18 +262,18 @@ def test_installer_points_at_the_uninstaller() -> None:
     installer = (REPO / "codex" / "install.sh").read_text(encoding="utf-8")
 
     assert "uninstall.sh" in installer
-    assert "$MEMSEARCH_HOME" in installer
+    assert "$MEMSEARCH_MINI_HOME" in installer
 
 
 def test_everything_downloadable_is_redirected_into_one_home() -> None:
     """One directory to delete: no cache may land in the user's own caches."""
     library = (REPO / "hooks" / "common.sh").read_text(encoding="utf-8")
 
-    assert 'MEMSEARCH_HOME="${MEMSEARCH_HOME:-$HOME/.memsearch}"' in library
+    assert 'MEMSEARCH_MINI_HOME="${MEMSEARCH_MINI_HOME:-$HOME/.memsearch-mini}"' in library
     for line in (
-        ': "${UV_CACHE_DIR:=$MEMSEARCH_HOME/uv-cache}"',
-        ': "${UV_PYTHON_INSTALL_DIR:=$MEMSEARCH_HOME/python}"',
-        ': "${HF_HOME:=$MEMSEARCH_HOME/models}"',
+        ': "${UV_CACHE_DIR:=$MEMSEARCH_MINI_HOME/uv-cache}"',
+        ': "${UV_PYTHON_INSTALL_DIR:=$MEMSEARCH_MINI_HOME/python}"',
+        ': "${HF_HOME:=$MEMSEARCH_MINI_HOME/models}"',
     ):
         assert line in library
     assert "export UV_CACHE_DIR UV_PYTHON_INSTALL_DIR HF_HOME" in library

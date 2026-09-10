@@ -46,7 +46,7 @@ _SCHEMA = (
 _FTS_DDL = 'CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, tokenize="unicode61 remove_diacritics 2")'
 _FTS_MISSING = (
     "this SQLite build has no FTS5 module, so keyword search is unavailable. Use a Python whose "
-    "sqlite3 was built with FTS5, or set MEMSEARCH_NO_FTS=1 for dense-vector search only."
+    "sqlite3 was built with FTS5, or set MEMSEARCH_MINI_NO_FTS=1 for dense-vector search only."
 )
 # unicode61 treats CJK ideographs, kana and hangul as token characters, so a whole
 # run collapses into one token.  Characters in these ranges are split out instead.
@@ -205,7 +205,7 @@ class Store:
                 for table in ("chunks_fts", "chunks", "meta"):
                     conn.execute(f"DROP TABLE IF EXISTS {table}")
             self.rebuilt, stored = True, None
-            sys.stderr.write(f"[memsearch] index schema is obsolete; rebuilding as version {SCHEMA_VERSION}\n")
+            sys.stderr.write(f"[memsearch-mini] index schema is obsolete; rebuilding as version {SCHEMA_VERSION}\n")
         if stored is None or not self._table_exists("chunks"):
             with self._write() as conn:
                 for ddl in _SCHEMA:
@@ -218,14 +218,14 @@ class Store:
 
     def _resolve_fts(self) -> bool:
         """Create the FTS5 table, or probe it — taking no write lock once it exists."""
-        if os.environ.get("MEMSEARCH_NO_FTS") == "1":
+        if os.environ.get("MEMSEARCH_MINI_NO_FTS") == "1":
             return False
         create = not self._table_exists("chunks_fts")
         try:
             if create:
                 with self._write() as conn:
                     conn.execute(_FTS_DDL)
-                    # Backfill, so a database indexed under MEMSEARCH_NO_FTS=1 does
+                    # Backfill, so a database indexed under MEMSEARCH_MINI_NO_FTS=1 does
                     # not come back with a silently half-empty keyword index.
                     rows = conn.execute("SELECT id, content FROM chunks").fetchall()
                     pairs = [(rowid, fts_text(content)) for rowid, content in rows]
@@ -250,13 +250,13 @@ class Store:
                   f"{provider}/{model} (dimension {dimension}) is configured")  # fmt: skip
         if not allow_rebuild:
             raise IndexMismatch(
-                f"{detail}. Run 'memsearch index --force' to rebuild it, or restore the previous "
-                f"settings with 'memsearch config set embedding.provider {stored[0]}'."
+                f"{detail}. Run 'memsearch-mini index --force' to rebuild it, or restore the previous "
+                f"settings with 'memsearch-mini config set embedding.provider {stored[0]}'."
             )
         self.reset()
         self._write_identity(wanted)
         self.rebuilt = True
-        sys.stderr.write(f"[memsearch] {detail}; rebuilding the index\n")
+        sys.stderr.write(f"[memsearch-mini] {detail}; rebuilding the index\n")
 
     def _write_identity(self, wanted: tuple[str, str, str]) -> None:
         with self._write():
@@ -406,7 +406,7 @@ class Store:
         if vector.shape[0] != matrix.shape[1]:
             raise IndexMismatch(
                 f"the query vector has {vector.shape[0]} dimensions but the index stores "
-                f"{matrix.shape[1]}. Rebuild it with 'memsearch index --force'."
+                f"{matrix.shape[1]}. Rebuild it with 'memsearch-mini index --force'."
             )
         norm = float(np.linalg.norm(vector))
         sims = matrix @ (vector / norm if norm else vector)
@@ -445,7 +445,7 @@ class Store:
             if len(blob) != dim * 4:
                 raise IndexMismatch(
                     f"chunk row {rowid} stores a {len(blob) // 4}-dimension embedding but the index "
-                    f"declares {dim}. Rebuild it with 'memsearch index --force'."
+                    f"declares {dim}. Rebuild it with 'memsearch-mini index --force'."
                 )
         ids = np.fromiter((row[0] for row in rows), dtype=np.int64, count=len(rows))
         if rows:
@@ -486,7 +486,7 @@ async def index_paths(store: Store, embedder: Any, paths: Sequence[str | Path], 
         seen.add(source)
         try:
             if scanned.size > max_bytes:
-                raise ValueError(f"file is {scanned.size / 1048576:.1f} MB, above the MEMSEARCH_MAX_FILE_MB "
+                raise ValueError(f"file is {scanned.size / 1048576:.1f} MB, above the MEMSEARCH_MINI_MAX_FILE_MB "
                                  f"limit of {max_bytes / 1048576:g} MB")  # fmt: skip
             indexed += await _index_file(store, embedder, source, force=force, max_chunk_size=max_chunk_size,
                                          overlap_lines=overlap_lines, min_chunk_size=min_chunk_size)  # fmt: skip
@@ -547,7 +547,7 @@ def _batched(items: list, size: int) -> Iterator[list]:
 
 
 def _max_file_bytes() -> int:
-    raw = os.environ.get("MEMSEARCH_MAX_FILE_MB", "").strip()
+    raw = os.environ.get("MEMSEARCH_MINI_MAX_FILE_MB", "").strip()
     try:
         return int((float(raw) if raw else DEFAULT_MAX_FILE_MB) * 1024 * 1024)
     except ValueError:

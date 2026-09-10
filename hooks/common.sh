@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared library for the memsearch plugin shell (launchers and bin/memsearch).
+# Shared library for the memsearch-mini plugin shell (launchers and bin/memsearch-mini).
 # Sourced, never executed; sourcing has no effect beyond variable assignment.
 #
 # Rules this file exists to keep:
@@ -9,13 +9,13 @@
 #   * a detached child redirects all three fds, or the hook runner keeps
 #     waiting on the pipe it still holds open;
 #   * everything the plugin downloads or creates outside a project lives under
-#     $MEMSEARCH_HOME, so uninstalling is `rm -rf` on one directory. Neither
+#     $MEMSEARCH_MINI_HOME, so uninstalling is `rm -rf` on one directory. Neither
 #     the checkout nor the user's caches are ever written to.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 PLATFORM="${PLATFORM:-claude}"
-MEMSEARCH_HOME="${MEMSEARCH_HOME:-$HOME/.memsearch}"
-export MEMSEARCH_HOME
+MEMSEARCH_MINI_HOME="${MEMSEARCH_MINI_HOME:-$HOME/.memsearch-mini}"
+export MEMSEARCH_MINI_HOME
 
 # uv usually lives in one of these and a hook may run with a minimal PATH.
 # Appended, never prepended, so a uv already on the caller's PATH still wins.
@@ -30,9 +30,9 @@ unset _ms_dir
 
 # Wheels, interpreters and embedding models are the bulk of what an uninstall
 # has to reclaim. A value the user set already wins: it is their disk.
-: "${UV_CACHE_DIR:=$MEMSEARCH_HOME/uv-cache}"
-: "${UV_PYTHON_INSTALL_DIR:=$MEMSEARCH_HOME/python}"
-: "${HF_HOME:=$MEMSEARCH_HOME/models}"
+: "${UV_CACHE_DIR:=$MEMSEARCH_MINI_HOME/uv-cache}"
+: "${UV_PYTHON_INSTALL_DIR:=$MEMSEARCH_MINI_HOME/python}"
+: "${HF_HOME:=$MEMSEARCH_MINI_HOME/models}"
 export UV_CACHE_DIR UV_PYTHON_INSTALL_DIR HF_HOME
 
 # Environments are keyed by checkout path, so two clones never share one.
@@ -49,11 +49,11 @@ _venv_id() {
   return 0
 }
 
-# The environment lives under $MEMSEARCH_HOME, never inside the checkout: a
+# The environment lives under $MEMSEARCH_MINI_HOME, never inside the checkout: a
 # marketplace install is a tarball extraction that /plugin update replaces.
-VENV="${UV_PROJECT_ENVIRONMENT:-$MEMSEARCH_HOME/venvs/$(_venv_id)}"
+VENV="${UV_PROJECT_ENVIRONMENT:-$MEMSEARCH_MINI_HOME/venvs/$(_venv_id)}"
 export UV_PROJECT_ENVIRONMENT="$VENV"
-SYNC_STAMP="$VENV/.memsearch-synced"
+SYNC_STAMP="$VENV/.memsearch-mini-synced"
 # Log and lock are siblings of the venv, never inside it: uv refuses to create
 # a project environment in an existing directory that holds no interpreter, so
 # a log written before the first sync would wedge the install permanently.
@@ -67,7 +67,7 @@ have_uv() {
 
 # Kill switch. Summarizer children re-enter the host CLI; they must not run hooks.
 hook_guard() {
-  if [ "${MEMSEARCH_DISABLE:-}" = "1" ]; then
+  if [ "${MEMSEARCH_MINI_DISABLE:-}" = "1" ]; then
     printf '%s\n' '{}'
     exit 0
   fi
@@ -77,7 +77,7 @@ hook_guard() {
 # Always `--extra onnx`, plus the configured embedding provider. Read with sed
 # (no Python): this runs before the runtime exists.
 extras_args() {
-  local cfg="${MEMSEARCH_CONFIG:-$MEMSEARCH_HOME/config.toml}" provider=""
+  local cfg="${MEMSEARCH_MINI_CONFIG:-$MEMSEARCH_MINI_HOME/config.toml}" provider=""
   local re="s/^[[:space:]]*provider[[:space:]]*=[[:space:]]*[\"']\{0,1\}\([A-Za-z0-9_-]*\).*/\1/p"
   [ -r "$cfg" ] && provider="$(sed -n "$re" "$cfg" 2>/dev/null | head -n 1)"
   printf '%s' '--extra onnx'
@@ -89,7 +89,7 @@ extras_args() {
 }
 
 venv_ready() {
-  [ -x "$VENV/bin/memsearch" ] || return 1
+  [ -x "$VENV/bin/memsearch-mini" ] || return 1
   [ -f "$SYNC_STAMP" ] || return 1
   # The stamp holds the extras the environment was built with, so switching
   # embedding.provider in the config resyncs by itself on the next session.
@@ -101,7 +101,7 @@ venv_ready() {
 
 _prepare_log() {
   local size=0
-  mkdir -p "$MEMSEARCH_HOME" "${SYNC_LOG%/*}" 2>/dev/null
+  mkdir -p "$MEMSEARCH_MINI_HOME" "${SYNC_LOG%/*}" 2>/dev/null
   size="$(wc -c <"$SYNC_LOG" 2>/dev/null)" || size=0
   case "$size" in ''|*[!0-9]*) size=0 ;; esac
   [ "$size" -gt 1048576 ] && : >"$SYNC_LOG"
@@ -134,7 +134,7 @@ sync_detached() {
   $runner bash -c '
     . "$1/hooks/common.sh"
     sync_now || exit 1
-    "$1/bin/memsearch" hook session-start --platform "$2" <<<"{}" >/dev/null 2>&1
-  ' memsearch-sync "$ROOT" "$platform" </dev/null >>"$SYNC_LOG" 2>&1 &
+    "$1/bin/memsearch-mini" hook session-start --platform "$2" <<<"{}" >/dev/null 2>&1
+  ' memsearch-mini-sync "$ROOT" "$platform" </dev/null >>"$SYNC_LOG" 2>&1 &
   return 0
 }

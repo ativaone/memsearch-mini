@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from memsearch import config as cfg_mod
-from memsearch.config import (
+from memsearch_mini import config as cfg_mod
+from memsearch_mini.config import (
     DEFAULT_SUMMARIZE_MODELS,
     Config,
     api_key_env_var,
@@ -39,13 +39,13 @@ def _read(path: Path) -> dict:
 
 def test_config_path_follows_the_environment_override(tmp_path, monkeypatch):
     override = tmp_path / "elsewhere" / "config.toml"
-    monkeypatch.setenv("MEMSEARCH_CONFIG", str(override))
+    monkeypatch.setenv("MEMSEARCH_MINI_CONFIG", str(override))
     assert config_path() == override
 
 
 def test_config_path_defaults_under_the_home_directory(monkeypatch, isolated_home):
-    monkeypatch.delenv("MEMSEARCH_CONFIG", raising=False)
-    assert config_path() == isolated_home / ".memsearch" / "config.toml"
+    monkeypatch.delenv("MEMSEARCH_MINI_CONFIG", raising=False)
+    assert config_path() == isolated_home / ".memsearch-mini" / "config.toml"
 
 
 # -- defaults and loading --------------------------------------------------------
@@ -106,7 +106,7 @@ def test_save_and_load_round_trip(tmp_path):
 def test_load_uses_the_environment_path_when_none_is_given(tmp_path, monkeypatch):
     path = tmp_path / "env-config.toml"
     path.write_text('[embedding]\nprovider = "mistral"\n', encoding="utf-8")
-    monkeypatch.setenv("MEMSEARCH_CONFIG", str(path))
+    monkeypatch.setenv("MEMSEARCH_MINI_CONFIG", str(path))
     assert load().embedding.provider == "mistral"
 
 
@@ -177,7 +177,7 @@ def test_set_value_rejects_an_unknown_key_before_touching_the_file(tmp_path):
 
 def test_set_value_uses_the_environment_path_when_none_is_given(tmp_path, monkeypatch):
     path = tmp_path / "env-config.toml"
-    monkeypatch.setenv("MEMSEARCH_CONFIG", str(path))
+    monkeypatch.setenv("MEMSEARCH_MINI_CONFIG", str(path))
     set_value("embedding.provider", "jina")
     assert _read(path) == {"embedding": {"provider": "jina"}}
 
@@ -192,7 +192,7 @@ def test_effective_model_prefers_the_explicit_model():
 
 
 def test_effective_model_falls_back_to_the_provider_default():
-    from memsearch.embeddings import DEFAULT_MODELS
+    from memsearch_mini.embeddings import DEFAULT_MODELS
 
     cfg = Config()
     assert cfg.effective_model() == DEFAULT_MODELS["onnx"]

@@ -1,4 +1,4 @@
-"""Tests for memsearch.hooks — payload reading, the session-start status and
+"""Tests for memsearch_mini.hooks — payload reading, the session-start status and
 recent-memory injection, and both stop pipelines. PATH is sanitized so no test
 can reach the real ``claude``/``codex`` binaries, and every write lands in
 tmp_path."""
@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from memsearch import config, hooks
+from memsearch_mini import config, hooks
 
 FILLER = "x" * 180
 
@@ -33,17 +33,17 @@ def _isolate(tmp_path, monkeypatch):
     fakebin.mkdir(exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("TMPDIR", str(scratch))
-    monkeypatch.setenv("MEMSEARCH_CONFIG", str(tmp_path / "config.toml"))
+    monkeypatch.setenv("MEMSEARCH_MINI_CONFIG", str(tmp_path / "config.toml"))
     # No test may reach the real agent CLIs; git stays available on purpose.
     monkeypatch.setenv("PATH", os.pathsep.join([str(fakebin), "/usr/bin", "/bin"]))
     monkeypatch.setattr(tempfile, "tempdir", str(scratch))
     for name in (
-        "MEMSEARCH_DIR",
+        "MEMSEARCH_MINI_DIR",
         "CLAUDE_PROJECT_DIR",
-        "MEMSEARCH_DISABLE",
-        "MEMSEARCH_IN_STOP_WORKER",
-        "MEMSEARCH_PLUGIN_ROOT",
-        "MEMSEARCH_SUMMARY_MAX_CHARS",
+        "MEMSEARCH_MINI_DISABLE",
+        "MEMSEARCH_MINI_IN_STOP_WORKER",
+        "MEMSEARCH_MINI_PLUGIN_ROOT",
+        "MEMSEARCH_MINI_SUMMARY_MAX_CHARS",
         "CODEX_HOME",
         "OPENAI_API_KEY",
     ):
@@ -54,7 +54,7 @@ def _isolate(tmp_path, monkeypatch):
 @pytest.fixture
 def project(tmp_path, monkeypatch):
     directory = tmp_path / "project"
-    (directory / ".memsearch" / "memory").mkdir(parents=True)
+    (directory / ".memsearch-mini" / "memory").mkdir(parents=True)
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(directory))
     return directory
 
@@ -86,11 +86,11 @@ def _fake_bin(tmp_path, name: str, body: str) -> Path:
 
 
 def _memory(project: Path) -> Path:
-    return project / ".memsearch" / "memory"
+    return project / ".memsearch-mini" / "memory"
 
 
 def _make_index(project: Path, *, chunks: int = 3, last_index_at: float | None = None) -> Path:
-    db_path = project / ".memsearch" / "index.db"
+    db_path = project / ".memsearch-mini" / "index.db"
     conn = sqlite3.connect(db_path)
     conn.execute("CREATE TABLE chunks (id INTEGER PRIMARY KEY, chunk_id TEXT)")
     conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
@@ -256,11 +256,11 @@ def test_resolve_project_dir_keeps_a_submodule_separate(tmp_path):
     assert hooks.resolve_project_dir({"cwd": str(outer / "lib")}) == outer / "lib"
 
 
-def test_memsearch_and_memory_dir(tmp_path, monkeypatch):
-    assert hooks.memsearch_dir(tmp_path) == tmp_path / ".memsearch"
-    assert hooks.memory_dir(tmp_path) == tmp_path / ".memsearch" / "memory"
+def test_memsearch_mini_and_memory_dir(tmp_path, monkeypatch):
+    assert hooks.memsearch_mini_dir(tmp_path) == tmp_path / ".memsearch-mini"
+    assert hooks.memory_dir(tmp_path) == tmp_path / ".memsearch-mini" / "memory"
 
-    monkeypatch.setenv("MEMSEARCH_DIR", str(tmp_path / "elsewhere"))
+    monkeypatch.setenv("MEMSEARCH_MINI_DIR", str(tmp_path / "elsewhere"))
     assert hooks.memory_dir(tmp_path) == tmp_path / "elsewhere" / "memory"
 
 
@@ -271,14 +271,14 @@ def test_session_start_without_memory_injects_nothing(project, spawns):
     payload = _json(_invoke(["session-start", "--platform", "claude"]))
 
     assert "hookSpecificOutput" not in payload
-    assert payload["systemMessage"].startswith("[memsearch v")
+    assert payload["systemMessage"].startswith("[memsearch-mini v")
     assert "embedding: onnx/gpahal/bge-m3-onnx-int8" in payload["systemMessage"]
     assert f"memory: {_memory(project)}" in payload["systemMessage"]
     assert _memory(project).is_dir()
 
 
 def test_session_start_is_a_no_op_when_disabled(project, spawns, monkeypatch, tmp_path):
-    monkeypatch.setenv("MEMSEARCH_DISABLE", "1")
+    monkeypatch.setenv("MEMSEARCH_MINI_DISABLE", "1")
     fresh = tmp_path / "untouched"
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(fresh))
 
@@ -310,7 +310,7 @@ def test_session_start_reports_a_missing_api_key_and_skips_indexing(project, spa
     payload = _json(_invoke(["session-start", "--platform", "claude"]))
 
     assert "ERROR: OPENAI_API_KEY not set — memory search disabled" in payload["systemMessage"]
-    assert "Tip: memsearch config set embedding.provider onnx" in payload["systemMessage"]
+    assert "Tip: memsearch-mini config set embedding.provider onnx" in payload["systemMessage"]
     assert "hookSpecificOutput" not in payload
     assert spawns == []
 
@@ -335,7 +335,7 @@ def test_session_start_reindexes_when_the_journal_is_newer(project, spawns):
     assert "— stale — reindexing in background" in payload["systemMessage"]
     assert [call[0] for call in spawns] == [hooks._index_argv(_memory(project))]
     assert spawns[0][1] == str(project)
-    assert spawns[0][2]["MEMSEARCH_DISABLE"] == "1"
+    assert spawns[0][2]["MEMSEARCH_MINI_DISABLE"] == "1"
 
 
 def test_session_start_keeps_quiet_when_the_index_is_fresh(project, spawns):
@@ -368,15 +368,15 @@ def test_session_start_detaches_the_reindex(project, monkeypatch):
     _invoke(["session-start", "--platform", "claude"])
 
     argv, kwargs = next(call for call in calls if call[0][0] == sys.executable)
-    assert argv == [sys.executable, "-m", "memsearch", "index", str(_memory(project)), "--skip-if-locked"]
+    assert argv == [sys.executable, "-m", "memsearch_mini", "index", str(_memory(project)), "--skip-if-locked"]
     assert kwargs["start_new_session"] is True
     assert kwargs["stdin"] == subprocess.DEVNULL
-    # Output goes to a plain log file under $MEMSEARCH_HOME, never to the hook's own pipes.
+    # Output goes to a plain log file under $MEMSEARCH_MINI_HOME, never to the hook's own pipes.
     assert kwargs["stdout"] is kwargs["stderr"]
     assert kwargs["stdout"].name == str(config.home_dir() / "index.log")
     kwargs["stdout"].close()
     assert kwargs["cwd"] == str(project)
-    assert kwargs["env"]["MEMSEARCH_DISABLE"] == "1"
+    assert kwargs["env"]["MEMSEARCH_MINI_DISABLE"] == "1"
 
 
 # --- recent-memory preview ---------------------------------------------------
@@ -519,13 +519,13 @@ def test_stop_guards_return_an_empty_object(project, spawns, tmp_path, monkeypat
     transcript = _claude_transcript(tmp_path / "session-a.jsonl")
     payload = {"transcript_path": str(transcript), "session_id": "session-a"}
 
-    monkeypatch.setenv("MEMSEARCH_DISABLE", "1")
+    monkeypatch.setenv("MEMSEARCH_MINI_DISABLE", "1")
     assert _json(_invoke(["stop", "--platform", "claude"], payload)) == {}
-    monkeypatch.delenv("MEMSEARCH_DISABLE")
+    monkeypatch.delenv("MEMSEARCH_MINI_DISABLE")
 
-    monkeypatch.setenv("MEMSEARCH_IN_STOP_WORKER", "1")
+    monkeypatch.setenv("MEMSEARCH_MINI_IN_STOP_WORKER", "1")
     assert _json(_invoke(["stop", "--platform", "codex"], payload)) == {}
-    monkeypatch.delenv("MEMSEARCH_IN_STOP_WORKER")
+    monkeypatch.delenv("MEMSEARCH_MINI_IN_STOP_WORKER")
 
     assert _json(_invoke(["stop", "--platform", "claude"], {**payload, "stop_hook_active": True})) == {}
     assert _json(_invoke(["stop", "--platform", "claude"], {})) == {}
@@ -564,7 +564,7 @@ def test_claude_stop_summarizes_and_appends(project, spawns, tmp_path):
 
     payload = _json(_invoke(["stop", "--platform", "claude"], {"transcript_path": str(transcript)}))
 
-    assert payload == {"systemMessage": "[memsearch] turn captured"}
+    assert payload == {"systemMessage": "[memsearch-mini] turn captured"}
     journals = list(_memory(project).glob("*.md"))
     text = journals[0].read_text(encoding="utf-8")
     assert text.startswith("\n## Session ")
@@ -579,7 +579,9 @@ def test_claude_stop_records_the_failure_instead_of_the_transcript(project, spaw
 
     payload = _json(_invoke(["stop", "--platform", "claude"], {"transcript_path": str(transcript)}))
 
-    assert payload == {"systemMessage": "[memsearch] turn recorded without a summary (summarizer exited with status 3)"}
+    assert payload == {
+        "systemMessage": "[memsearch-mini] turn recorded without a summary (summarizer exited with status 3)"
+    }
     text = next(iter(_memory(project).glob("*.md"))).read_text(encoding="utf-8")
     assert "- Memory summary unavailable: summarizer exited with status 3;" in text
     assert "Summarize this session" not in text  # never persist raw transcript text
@@ -617,8 +619,8 @@ def _handoff(project, spawns, tmp_path) -> Path:
 
     assert payload == {}
     argv, cwd, env = spawns[0]
-    assert argv[:5] == [sys.executable, "-m", "memsearch", "hook", "stop-worker"]
-    assert env["MEMSEARCH_IN_STOP_WORKER"] == "1"
+    assert argv[:5] == [sys.executable, "-m", "memsearch_mini", "hook", "stop-worker"]
+    assert env["MEMSEARCH_MINI_IN_STOP_WORKER"] == "1"
     assert cwd == str(project)
     return Path(argv[5])
 
@@ -627,7 +629,7 @@ def test_codex_stop_hands_a_work_file_to_the_detached_worker(project, spawns, tm
     _fake_bin(tmp_path, "codex", 'echo "- Codex summarized the turn."\n')
     workfile = _handoff(project, spawns, tmp_path)
 
-    assert workfile.name.startswith("memsearch-stop.")
+    assert workfile.name.startswith("memsearch-mini-stop.")
     assert workfile.suffix == ".json"
     assert workfile.parent == tmp_path / "tmp"
     work = json.loads(workfile.read_text(encoding="utf-8"))
@@ -672,7 +674,7 @@ def test_stop_worker_tolerates_a_missing_work_file(tmp_path, monkeypatch):
 
 
 def _pending(project: Path) -> Path:
-    return project / ".memsearch" / "pending"
+    return project / ".memsearch-mini" / "pending"
 
 
 def _age(path: Path, seconds: float) -> None:
@@ -710,7 +712,7 @@ def test_claude_stop_records_the_turn_before_summarizing_and_forgets_it_after(pr
 
     payload = _json(_invoke(["stop", "--platform", "claude"], {"transcript_path": str(transcript)}))
 
-    assert payload == {"systemMessage": "[memsearch] turn captured"}
+    assert payload == {"systemMessage": "[memsearch-mini] turn captured"}
     assert [(r["session_id"], r["turn_uuid"], r["transcript_path"]) for r in seen] == [
         ("session-a", "turn-a", str(transcript))
     ]
@@ -748,11 +750,11 @@ def test_session_start_and_stop_hand_stale_records_to_a_detached_worker(project,
     _make_index(project, last_index_at=time.time() + 600)  # nothing else to spawn
     transcript = _claude_transcript(tmp_path / "session-a.jsonl")
     _pending_record(project, transcript, age=hooks.PENDING_GRACE_SECONDS + 1)
-    recover = [sys.executable, "-m", "memsearch", "hook", "recover", str(project)]
+    recover = [sys.executable, "-m", "memsearch_mini", "hook", "recover", str(project)]
 
     payload = _json(_invoke(["session-start", "--platform", "claude"], {}))
     assert [call[0] for call in spawns] == [recover]
-    assert spawns[0][2]["MEMSEARCH_IN_STOP_WORKER"] == "1"
+    assert spawns[0][2]["MEMSEARCH_MINI_IN_STOP_WORKER"] == "1"
     assert payload["systemMessage"].endswith(" | recovering 1 earlier turn(s) in the background")
 
     spawns.clear()
@@ -760,7 +762,9 @@ def test_session_start_and_stop_hand_stale_records_to_a_detached_worker(project,
     fresh = _claude_transcript(tmp_path / "session-b.jsonl", uuid="turn-b")
     payload = _json(_invoke(["stop", "--platform", "claude"], {"transcript_path": str(fresh)}))
     assert [call[0] for call in spawns] == [hooks._index_argv(_memory(project)), recover]
-    assert payload == {"systemMessage": "[memsearch] turn captured | recovering 1 earlier turn(s) in the background"}
+    assert payload == {
+        "systemMessage": "[memsearch-mini] turn captured | recovering 1 earlier turn(s) in the background"
+    }
 
 
 def test_recover_journals_the_turn_into_the_day_it_happened(project, tmp_path, monkeypatch):
@@ -770,7 +774,7 @@ def test_recover_journals_the_turn_into_the_day_it_happened(project, tmp_path, m
     indexed: list[str] = []
     monkeypatch.setattr(hooks, "_run_index", lambda memory, cwd: indexed.append(str(memory)))
 
-    assert _json(_invoke(["recover", str(project)])) == {"systemMessage": "[memsearch] recovered 1 turn(s)"}
+    assert _json(_invoke(["recover", str(project)])) == {"systemMessage": "[memsearch-mini] recovered 1 turn(s)"}
 
     text = (_memory(project) / "2026-03-02.md").read_text(encoding="utf-8")
     assert text == (
@@ -828,7 +832,7 @@ def test_recover_drops_a_record_whose_transcript_is_gone(project, tmp_path, monk
     _pending_record(project, tmp_path / "vanished.jsonl", age=hooks.PENDING_GRACE_SECONDS + 1)
     monkeypatch.setattr(hooks, "_run_index", lambda memory, cwd: None)
 
-    assert _json(_invoke(["recover", str(project)])) == {"systemMessage": "[memsearch] recovered 0 turn(s)"}
+    assert _json(_invoke(["recover", str(project)])) == {"systemMessage": "[memsearch-mini] recovered 0 turn(s)"}
 
     assert list(_pending(project).iterdir()) == []
     assert list(_memory(project).glob("*.md")) == []

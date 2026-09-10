@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from memsearch import transcript as tr
+from memsearch_mini import transcript as tr
 
 
 def _write(path: Path, rows: list[dict]) -> Path:

@@ -28,8 +28,8 @@ printf '%s\n' "$*" >> "$FAKE_UV_LOG"
 case "${1:-}" in
   sync)
     mkdir -p "$UV_PROJECT_ENVIRONMENT/bin"
-    printf '#!/bin/sh\nexit 0\n' > "$UV_PROJECT_ENVIRONMENT/bin/memsearch"
-    chmod +x "$UV_PROJECT_ENVIRONMENT/bin/memsearch"
+    printf '#!/bin/sh\nexit 0\n' > "$UV_PROJECT_ENVIRONMENT/bin/memsearch-mini"
+    chmod +x "$UV_PROJECT_ENVIRONMENT/bin/memsearch-mini"
     exit 0
     ;;
   run)
@@ -92,7 +92,7 @@ class Installer:
         entries = self.hooks()["hooks"].get(event, [])
         return [hook["command"] for entry in entries for hook in entry["hooks"]]
 
-    def memsearch_commands(self, event: str) -> list[str]:
+    def memsearch_mini_commands(self, event: str) -> list[str]:
         return [command for command in self.commands(event) if str(self.root) in command]
 
     def uv_calls(self) -> list[str]:
@@ -113,11 +113,11 @@ def installer(tmp_path: Path) -> Installer:
     (root / "uv.lock").write_text("version = 1\n", encoding="utf-8")
     # Deliberately unset: the installer is what makes them executable again
     # (tarball extraction and `cp -r` can drop the bit).
-    for script in [root / "bin" / "memsearch", *(root / "hooks").glob("*.sh")]:
+    for script in [root / "bin" / "memsearch-mini", *(root / "hooks").glob("*.sh")]:
         script.chmod(0o644)
 
     home = tmp_path / "home"
-    (home / ".memsearch").mkdir(parents=True, exist_ok=True)
+    (home / ".memsearch-mini").mkdir(parents=True, exist_ok=True)
     logs = tmp_path / "logs"
     logs.mkdir(exist_ok=True)
 
@@ -132,8 +132,8 @@ def installer(tmp_path: Path) -> Installer:
         "TMPDIR": str(tmp_path / "tmp"),
         "LANG": "C.UTF-8",
         "UV_PROJECT_ENVIRONMENT": str(tmp_path / "venv"),
-        "MEMSEARCH_CONFIG": str(home / ".memsearch" / "config.toml"),
-        "MEMSEARCH_SKIP_SYNC": "1",
+        "MEMSEARCH_MINI_CONFIG": str(home / ".memsearch-mini" / "config.toml"),
+        "MEMSEARCH_MINI_SKIP_SYNC": "1",
         "FAKE_UV_LOG": str(logs / "uv.log"),
         "FAKE_PYTHON": sys.executable,
     }
@@ -163,7 +163,7 @@ def test_fresh_install_writes_hooks_skill_and_flag(installer: Installer) -> None
     assert "hooks = true" in installer.config_file.read_text(encoding="utf-8")
     skill = installer.skill.read_text(encoding="utf-8")
     assert "__INSTALL_DIR__" not in skill
-    assert f"{installer.root}/bin/memsearch" in skill
+    assert f"{installer.root}/bin/memsearch-mini" in skill
 
 
 def test_install_is_idempotent(installer: Installer) -> None:
@@ -173,7 +173,7 @@ def test_install_is_idempotent(installer: Installer) -> None:
 
     assert installer.hooks() == first
     for event in EXPECTED:
-        assert len(installer.memsearch_commands(event)) == 1
+        assert len(installer.memsearch_mini_commands(event)) == 1
     # The second run backs the first result up before rewriting it.
     assert (installer.hooks_file.with_suffix(".json.bak")).exists()
     assert not installer.hooks_file.with_name("hooks.json.tmp").exists()
@@ -197,7 +197,7 @@ def test_foreign_hooks_are_preserved(installer: Installer) -> None:
 
     assert "echo other" in installer.commands("SessionStart")
     assert installer.commands("PreToolUse") == ["echo guard"]
-    assert len(installer.memsearch_commands("SessionStart")) == 1
+    assert len(installer.memsearch_mini_commands("SessionStart")) == 1
 
 
 def test_legacy_upstream_entries_are_removed(installer: Installer) -> None:
@@ -256,7 +256,7 @@ def test_legacy_array_format_is_converted(installer: Installer) -> None:
     stop = data["hooks"]["Stop"][0]["hooks"][0]
     assert stop["command"] == "echo legacy"
     assert stop["timeout"] == 2  # 1500 ms rounds up to whole seconds
-    assert len(installer.memsearch_commands("Stop")) == 1
+    assert len(installer.memsearch_mini_commands("Stop")) == 1
 
 
 def test_unreadable_hooks_file_is_replaced_not_crashed(installer: Installer) -> None:
@@ -265,7 +265,7 @@ def test_unreadable_hooks_file_is_replaced_not_crashed(installer: Installer) -> 
 
     installer.run()
 
-    assert len(installer.memsearch_commands("Stop")) == 1
+    assert len(installer.memsearch_mini_commands("Stop")) == 1
     assert installer.hooks_file.with_suffix(".json.bak").read_text(encoding="utf-8") == "not json at all"
 
 
@@ -313,7 +313,7 @@ def test_existing_skill_directory_is_replaced(installer: Installer) -> None:
 def test_scripts_are_executable_after_install(installer: Installer) -> None:
     installer.run()
 
-    for script in [installer.root / "bin" / "memsearch", *(installer.root / "hooks").glob("*.sh")]:
+    for script in [installer.root / "bin" / "memsearch-mini", *(installer.root / "hooks").glob("*.sh")]:
         assert os.access(script, os.X_OK), f"{script} is not executable"
 
 
@@ -321,16 +321,16 @@ def test_skip_sync_avoids_the_blocking_sync(installer: Installer) -> None:
     installer.run()
 
     assert [call for call in installer.uv_calls() if call.startswith("sync")] == []
-    assert not (Path(installer.env["UV_PROJECT_ENVIRONMENT"]) / "bin" / "memsearch").exists()
+    assert not (Path(installer.env["UV_PROJECT_ENVIRONMENT"]) / "bin" / "memsearch-mini").exists()
 
 
 def test_without_skip_sync_the_runtime_is_synced_first(installer: Installer) -> None:
-    installer.run(extra_env={"MEMSEARCH_SKIP_SYNC": "0"})
+    installer.run(extra_env={"MEMSEARCH_MINI_SKIP_SYNC": "0"})
 
     assert [call for call in installer.uv_calls() if call.startswith("sync")] == [
         f"sync --project {installer.root} --frozen --extra onnx"
     ]
-    assert (Path(installer.env["UV_PROJECT_ENVIRONMENT"]) / "bin" / "memsearch").exists()
+    assert (Path(installer.env["UV_PROJECT_ENVIRONMENT"]) / "bin" / "memsearch-mini").exists()
 
 
 def test_missing_uv_aborts_before_touching_home(installer: Installer) -> None:
@@ -357,7 +357,7 @@ def test_json_merge_falls_back_to_uv_run_python(installer: Installer, tmp_path: 
 
     installer.run(extra_env={"PATH": str(slim)})
 
-    assert len(installer.memsearch_commands("Stop")) == 1
+    assert len(installer.memsearch_mini_commands("Stop")) == 1
     assert "hooks = true" in installer.config_file.read_text(encoding="utf-8")
     assert "__INSTALL_DIR__" not in installer.skill.read_text(encoding="utf-8")
     assert any(call.startswith("run ") for call in installer.uv_calls())

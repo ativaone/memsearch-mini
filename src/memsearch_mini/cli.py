@@ -1,4 +1,4 @@
-"""The ``memsearch`` command line.
+"""The ``memsearch-mini`` command line.
 
 Module scope stays light (click, stdlib, and the dependency-free ``config`` and
 ``hooks``); numpy, the store and the embedding backends load inside the commands
@@ -33,7 +33,7 @@ def _configure_cli_streams() -> None:
             stream.reconfigure(encoding="utf-8", errors="replace")
 
 
-class _MemSearchGroup(click.Group):
+class _MemSearchMiniGroup(click.Group):
     """Configure CLI streams before Click parses arguments or exits eagerly."""
 
     def main(self, *args, **kwargs):
@@ -47,8 +47,8 @@ def _fail(message: str) -> NoReturn:
 
 
 def _locations() -> tuple[Path, Path]:
-    """``(.memsearch directory, index database)`` for the current project."""
-    mdir = hooks.memsearch_dir(hooks.resolve_project_dir({}))
+    """``(.memsearch-mini directory, index database)`` for the current project."""
+    mdir = hooks.memsearch_mini_dir(hooks.resolve_project_dir({}))
     return mdir, mdir / "index.db"
 
 
@@ -77,15 +77,15 @@ def _index_lock(mdir: Path, skip_if_locked: bool) -> Iterator[bool]:
             if skip_if_locked:
                 yield False
                 return
-            click.echo("[memsearch] another indexer is running; waiting for it", err=True)
+            click.echo("[memsearch-mini] another indexer is running; waiting for it", err=True)
             fcntl.flock(handle, fcntl.LOCK_EX)
         yield True
 
 
-@click.group(cls=_MemSearchGroup)
+@click.group(cls=_MemSearchMiniGroup)
 @click.version_option(package_name="memsearch-mini")
 def cli() -> None:
-    """memsearch — persistent memory for Claude Code and Codex."""
+    """memsearch-mini — persistent memory for Claude Code and Codex."""
 
 
 @cli.command()
@@ -154,7 +154,7 @@ def search(query: str, top_k: int, json_output: bool) -> None:
     for position, hit in enumerate(hits, 1):
         body = hit.content
         if len(body) > 500:  # a long chunk is shown in full by 'expand'
-            body = f"{body[:500]}\n  ... [truncated, run 'memsearch expand {hit.chunk_id}' for full content]"
+            body = f"{body[:500]}\n  ... [truncated, run 'memsearch-mini expand {hit.chunk_id}' for full content]"
         heading = f"Heading: {hit.heading}\n" if hit.heading else ""
         click.echo(f"\n--- Result {position} (score: {hit.score:.4f}) ---\nSource: {hit.source}\n{heading}{body}")
 
@@ -249,7 +249,7 @@ def _render(value: Any) -> str:  # TOML-ish scalars: booleans lowercase, the res
 
 @cli.group("config")
 def config_group() -> None:
-    """Read and write ~/.memsearch/config.toml."""
+    """Read and write ~/.memsearch-mini/config.toml."""
 
 
 @config_group.command("get")

@@ -1,6 +1,6 @@
 """Mistral AI embedding provider.
 
-Requires: ``pip install 'memsearch[mistral]'`` or ``uv add 'memsearch[mistral]'``
+Requires: ``pip install 'memsearch-mini[mistral]'`` or ``uv add 'memsearch-mini[mistral]'``
 Environment variables:
     MISTRAL_API_KEY — required
 

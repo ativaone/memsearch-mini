@@ -3,7 +3,7 @@
 The daily journals are lossy summaries — they drop the exact commands an agent
 ran. Those live only in the raw session transcript, whose format differs per
 agent, so this module parses both into a common shape that **includes tool calls
-(the exact commands) and their output** and exposes it as the ``memsearch
+(the exact commands) and their output** and exposes it as the ``memsearch-mini
 transcript`` CLI command, which the memory-recall skill calls after ``search``
 and ``expand`` when it needs the original conversation.
 

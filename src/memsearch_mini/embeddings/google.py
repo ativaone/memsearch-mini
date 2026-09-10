@@ -1,6 +1,6 @@
 """Google (Gemini) embedding provider.
 
-Requires: ``pip install 'memsearch[google]'`` or ``uv add 'memsearch[google]'``
+Requires: ``pip install 'memsearch-mini[google]'`` or ``uv add 'memsearch-mini[google]'``
 Environment variables:
     GOOGLE_API_KEY — required unless using Vertex AI credentials
     GOOGLE_GENAI_USE_VERTEXAI — optional, set to "true" to use Vertex AI auth

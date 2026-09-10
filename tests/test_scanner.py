@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from memsearch.scanner import ScannedFile, read_utf8_text_replace, scan_paths
+from memsearch_mini.scanner import ScannedFile, read_utf8_text_replace, scan_paths
 
 
 def test_scan_finds_markdown_files_recursively(tmp_path: Path):

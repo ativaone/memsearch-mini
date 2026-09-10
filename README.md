@@ -15,7 +15,7 @@
 > - **No background maintenance** (`PROJECT.md` / `USER.md`), no memory-to-skill distillation, no LLM
 >   compaction of chunks, no cross-encoder reranker, no file watcher.
 > - **The bash hooks are thin launchers.** They check the kill switch and the runtime, then hand
->   stdin to Python; all logic lives in `src/memsearch/hooks.py` and `capture.py`.
+>   stdin to Python; all logic lives in `src/memsearch_mini/hooks.py` and `capture.py`.
 > - **The CLI runs from this checkout via `uv run`**, not from a package installed from PyPI, so the
 >   hooks and the CLI they call can never come from different installs.
 > - **Uninstalling leaves nothing behind.** Upstream's hooks installed `uv` for you with
@@ -24,7 +24,7 @@
 >   the ONNX model download into the global Hugging Face cache. Uninstalling the plugin removed none
 >   of that.
 > - This fork installs no tools on your behalf — `uv` is a documented prerequisite — and points the
->   runtime, the uv cache, any downloaded interpreter and the model cache at `~/.memsearch`.
+>   runtime, the uv cache, any downloaded interpreter and the model cache at `~/.memsearch-mini`.
 >   Removing the plugin and that one directory removes everything.
 >
 > Everything that survived — the journal format, the chunker, the embedding providers, the
@@ -40,7 +40,7 @@ markdown, indexes it locally, and hands the relevant parts back the next time th
   missing or older than the journals.
 - **Every turn is written down.** The Stop hook extracts the last exchange, has `claude -p` (or
   `codex exec`) rewrite it as third-person bullets, and appends it to
-  `.memsearch/memory/YYYY-MM-DD.md`.
+  `.memsearch-mini/memory/YYYY-MM-DD.md`.
 - **Recall is a skill, not an injection.** `memory-recall` runs in a forked subagent that searches,
   expands the promising hits, and can drill into the original transcript — the main conversation
   only sees the curated answer.
@@ -59,8 +59,8 @@ markdown, indexes it locally, and hands the relevant parts back the next time th
   repository.
 - **`claude` and/or `codex`** — whichever host you use also does the summarizing.
 - **Disk** — the first index downloads the ONNX embedding model (`gpahal/bge-m3-onnx-int8`, several
-  hundred MB) into `~/.memsearch/models/`, plus roughly 90 MB of wheels in the runtime environment
-  under `~/.memsearch/venvs/`.
+  hundred MB) into `~/.memsearch-mini/models/`, plus roughly 90 MB of wheels in the runtime environment
+  under `~/.memsearch-mini/venvs/`.
 - **POSIX** (Linux, macOS, WSL): the hooks rely on `select` on a pipe and detached process groups.
 
 ## Install — Claude Code
@@ -73,10 +73,10 @@ markdown, indexes it locally, and hands the relevant parts back the next time th
 The first session prints:
 
 ```
-[memsearch] installing runtime in the background — memory available from the next session
+[memsearch-mini] installing runtime in the background — memory available from the next session
 ```
 
-A detached `uv sync` is building the runtime under `~/.memsearch/venvs/`, logging to the `.log` file
+A detached `uv sync` is building the runtime under `~/.memsearch-mini/venvs/`, logging to the `.log` file
 beside it. When it finishes it runs the SessionStart hook once, so the model download and the first
 index build start immediately instead of waiting for the next session. Until the runtime is ready,
 the Stop and UserPromptSubmit hooks print `{}` and do nothing — that first session is not captured,
@@ -98,11 +98,11 @@ git clone https://github.com/ativaone/memsearch-mini.git
 bash memsearch-mini/codex/install.sh
 ```
 
-The installer runs five steps: it checks for `uv`; runs a blocking `bin/memsearch --sync`; copies
+The installer runs five steps: it checks for `uv`; runs a blocking `bin/memsearch-mini --sync`; copies
 `codex/skills/memory-recall` to `~/.agents/skills/memory-recall`; backs up `~/.codex/hooks.json` to
 `~/.codex/hooks.json.bak` and merges in three entries (SessionStart 10 s, UserPromptSubmit 5 s,
 Stop 30 s); sets `hooks = true` under `[features]` in `~/.codex/config.toml`; and marks the scripts
-executable. Set `MEMSEARCH_SKIP_SYNC=1` to skip the blocking sync and let the first session do it.
+executable. Set `MEMSEARCH_MINI_SKIP_SYNC=1` to skip the blocking sync and let the first session do it.
 
 The checkout path is baked into both `~/.codex/hooks.json` and the installed skill, so **re-run the
 installer after moving or renaming the clone**. It is idempotent: it strips its own old entries
@@ -121,9 +121,9 @@ To undo all of this, see [Uninstall](#uninstall).
 ```
 turn ends ─▶ Stop hook ─▶ parse last turn ─▶ claude -p / codex exec ─▶ bullets
                                                                         │
-              .memsearch/memory/YYYY-MM-DD.md  ◀───────────────────────┘
+              .memsearch-mini/memory/YYYY-MM-DD.md  ◀──────────────────┘
                             │
-              index (detached) ─▶ chunk ─▶ embed ─▶ .memsearch/index.db
+              index (detached) ─▶ chunk ─▶ embed ─▶ .memsearch-mini/index.db
                                                           │
   question ─▶ memory-recall skill ─▶ search (dense + FTS5, fused with RRF)
                                        └─▶ expand ─▶ transcript
@@ -131,29 +131,29 @@ turn ends ─▶ Stop hook ─▶ parse last turn ─▶ claude -p / codex exec 
 
 ### On disk
 
-Two places, and only two: the project, and `$MEMSEARCH_HOME` (default `~/.memsearch`). **The plugin
+Two places, and only two: the project, and `$MEMSEARCH_MINI_HOME` (default `~/.memsearch-mini`). **The plugin
 checkout is never written to at runtime** — no virtualenv inside it, no caches, no state.
 
 Per project:
 
 | Path | What it is |
 |---|---|
-| `<project>/.memsearch/memory/YYYY-MM-DD.md` | Daily journal — **the source of truth**. Plain markdown, editable, versionable. |
-| `<project>/.memsearch/index.db` | Derived SQLite index: chunk rows, float32 embeddings, an FTS5 table. Rebuildable. |
-| `<project>/.memsearch/index.lock` | Held by a running indexer; `index --skip-if-locked` gives up instead of queueing. |
-| `<project>/.memsearch/pending/` | One small JSON per turn whose summary is in flight (transcript path, turn uuid, time — never content). Empty whenever every turn has been written; see [Hooks](#hooks). |
+| `<project>/.memsearch-mini/memory/YYYY-MM-DD.md` | Daily journal — **the source of truth**. Plain markdown, editable, versionable. |
+| `<project>/.memsearch-mini/index.db` | Derived SQLite index: chunk rows, float32 embeddings, an FTS5 table. Rebuildable. |
+| `<project>/.memsearch-mini/index.lock` | Held by a running indexer; `index --skip-if-locked` gives up instead of queueing. |
+| `<project>/.memsearch-mini/pending/` | One small JSON per turn whose summary is in flight (transcript path, turn uuid, time — never content). Empty whenever every turn has been written; see [Hooks](#hooks). |
 
-Under `$MEMSEARCH_HOME`:
+Under `$MEMSEARCH_MINI_HOME`:
 
 | Path | What it is |
 |---|---|
-| `~/.memsearch/config.toml` | The only configuration layer. |
-| `~/.memsearch/venvs/<hash>/` | The runtime, created and kept current by `uv` (`UV_PROJECT_ENVIRONMENT`). The hash comes from the plugin path, so a Claude Code install and a Codex clone get one each. |
-| `~/.memsearch/venvs/<hash>.log` · `<hash>.lock` | Sync log and sync lock — *siblings* of the environment, never inside it. |
-| `~/.memsearch/uv-cache/` | uv's package cache (`UV_CACHE_DIR`). |
-| `~/.memsearch/python/` | Interpreter uv downloaded, if it had to (`UV_PYTHON_INSTALL_DIR`). |
-| `~/.memsearch/models/` | Hugging Face cache (`HF_HOME`) — where the ONNX embedding model lands. |
-| `~/.memsearch/index.log` | Output of every background indexer the hooks spawn (model download, indexing errors). Truncated past 1 MB. |
+| `~/.memsearch-mini/config.toml` | The only configuration layer. |
+| `~/.memsearch-mini/venvs/<hash>/` | The runtime, created and kept current by `uv` (`UV_PROJECT_ENVIRONMENT`). The hash comes from the plugin path, so a Claude Code install and a Codex clone get one each. |
+| `~/.memsearch-mini/venvs/<hash>.log` · `<hash>.lock` | Sync log and sync lock — *siblings* of the environment, never inside it. |
+| `~/.memsearch-mini/uv-cache/` | uv's package cache (`UV_CACHE_DIR`). |
+| `~/.memsearch-mini/python/` | Interpreter uv downloaded, if it had to (`UV_PYTHON_INSTALL_DIR`). |
+| `~/.memsearch-mini/models/` | Hugging Face cache (`HF_HOME`) — where the ONNX embedding model lands. |
+| `~/.memsearch-mini/index.log` | Output of every background indexer the hooks spawn (model download, indexing errors). Truncated past 1 MB. |
 
 If you already export `UV_CACHE_DIR`, `HF_HOME` or `UV_PROJECT_ENVIRONMENT`, your values are kept and
 the plugin uses those instead.
@@ -179,9 +179,9 @@ at the raw transcript.
 
 | Event | Timeout | What happens |
 |---|---|---|
-| `SessionStart` | 10 s | Prints `[memsearch v<version>] embedding: <provider>/<model> \| index: N chunks, updated … \| memory: <dir>`, injects a `# Recent Memory` block (two newest journals, at most 40 lines and 1800 bytes) as `additionalContext`, and spawns a detached reindex when the index is absent or stale. |
-| `UserPromptSubmit` | 5 s | Pure bash, never starts Python: prints the hint `[memsearch] Recall available if needed`. |
-| `Stop` | 120 s async (Claude), 30 s (Codex) | Records the turn under `.memsearch/pending/`, summarizes it, appends it to today's journal, drops the record, then spawns a detached `index --skip-if-locked`. On Claude it ends with a `systemMessage` — `[memsearch] turn captured`, or `turn recorded without a summary (<reason>)` — which the host shows when the async hook completes: the quiet sign that it is safe to quit. |
+| `SessionStart` | 10 s | Prints `[memsearch-mini v<version>] embedding: <provider>/<model> \| index: N chunks, updated … \| memory: <dir>`, injects a `# Recent Memory` block (two newest journals, at most 40 lines and 1800 bytes) as `additionalContext`, and spawns a detached reindex when the index is absent or stale. |
+| `UserPromptSubmit` | 5 s | Pure bash, never starts Python: prints the hint `[memsearch-mini] Recall available if needed`. |
+| `Stop` | 120 s async (Claude), 30 s (Codex) | Records the turn under `.memsearch-mini/pending/`, summarizes it, appends it to today's journal, drops the record, then spawns a detached `index --skip-if-locked`. On Claude it ends with a `systemMessage` — `[memsearch-mini] turn captured`, or `turn recorded without a summary (<reason>)` — which the host shows when the async hook completes: the quiet sign that it is safe to quit. |
 
 There is no SessionEnd hook — nothing needs stopping. On Codex the Stop hook is two-phase: it parses
 the rollout synchronously (Codex may delete it on return), writes a work file, prints `{}`, and lets
@@ -196,19 +196,19 @@ The hook that spawned the worker says so in its status (`recovering N earlier tu
 background`); a record too young to touch is reported as `N turn(s) pending, recovery at the next
 turn end`. Codex keeps its own two-phase scheme and does not use the pending directory.
 
-Every hook is a no-op when `MEMSEARCH_DISABLE=1`, which is exactly how the summarizer child avoids
+Every hook is a no-op when `MEMSEARCH_MINI_DISABLE=1`, which is exactly how the summarizer child avoids
 re-entering the hooks that spawned it.
 
 ### One memory for many projects
 
-`MEMSEARCH_DIR` overrides the *project* directory `<git root>/.memsearch`. Export it and every
-project writes to the same journals and shares one index. (`MEMSEARCH_HOME` is the other one: it
+`MEMSEARCH_MINI_DIR` overrides the *project* directory `<git root>/.memsearch-mini`. Export it and every
+project writes to the same journals and shares one index. (`MEMSEARCH_MINI_HOME` is the other one: it
 moves the runtime and caches, not your memories.)
 
 ## Configuration
 
-`~/.memsearch/config.toml` is the whole configuration surface — `$MEMSEARCH_HOME` moves the whole
-directory, `MEMSEARCH_CONFIG` moves just this file. The first SessionStart writes
+`~/.memsearch-mini/config.toml` is the whole configuration surface — `$MEMSEARCH_MINI_HOME` moves the whole
+directory, `MEMSEARCH_MINI_CONFIG` moves just this file. The first SessionStart writes
 `provider = "onnx"` if the file does not exist.
 
 ```toml
@@ -241,13 +241,13 @@ filename_suffix = ""  # "hostname" writes YYYY-MM-DD-<host>.md, for a memory fol
 
 Read and write it with the CLI, always through the launcher in the plugin directory (for a
 marketplace install that is under `~/.claude/plugins/marketplaces/ativaone/`; for Codex it is
-`<checkout>/bin/memsearch`):
+`<checkout>/bin/memsearch-mini`):
 
 ```bash
-bin/memsearch config list
-bin/memsearch config get embedding.provider
-bin/memsearch config set embedding.provider openai
-bin/memsearch config set claude.summarize_model sonnet
+bin/memsearch-mini config list
+bin/memsearch-mini config get embedding.provider
+bin/memsearch-mini config set embedding.provider openai
+bin/memsearch-mini config set claude.summarize_model sonnet
 ```
 
 Unknown keys are rejected; `int` and `bool` values are coerced and validated on the way in.
@@ -268,11 +268,11 @@ Unknown keys are rejected; `int` and `bool` values are coerced and validated on 
 `embedding.api_key` is an alternative to exporting the variable; a real environment variable takes
 precedence over it.
 
-Each provider needs its own SDK, so `bin/memsearch` reads `embedding.provider` straight out of the
+Each provider needs its own SDK, so `bin/memsearch-mini` reads `embedding.provider` straight out of the
 config file and passes `--extra onnx --extra <provider>` to `uv`. The runtime remembers which extras
 it was built with, so switching provider triggers an automatic resync: the next session shows
-`installing runtime in the background` and picks it up from there, or run `bin/memsearch --sync` to
-do it right away (any direct `bin/memsearch <command>` call also resyncs inline first).
+`installing runtime in the background` and picks it up from there, or run `bin/memsearch-mini --sync` to
+do it right away (any direct `bin/memsearch-mini <command>` call also resyncs inline first).
 
 Switching provider or model changes the vectors, so the identity recorded in the index no longer
 matches: the next `index` run empties the database and rebuilds it (and says so on stderr), while
@@ -280,50 +280,50 @@ matches: the next `index` run empties the database and rebuilds it (and says so 
 
 ## CLI reference
 
-Always invoke it as `<plugin>/bin/memsearch`, never as a bare `memsearch` — the launcher is what
+Always invoke it as `<plugin>/bin/memsearch-mini`, never as a bare `memsearch-mini` — the launcher is what
 pins the CLI to this checkout.
 
 | Command | What it does |
 |---|---|
-| `memsearch --version` | Version of the installed package. |
-| `memsearch index [PATHS]... [--force] [--skip-if-locked]` | Index markdown; defaults to the project's memory directory. `--force` re-embeds everything, `--skip-if-locked` returns at once when another indexer is running. |
-| `memsearch search QUERY [-k N] [--json]` | Hybrid search: dense cosine + FTS5 keywords, fused with RRF. |
-| `memsearch expand CHUNK_ID [--lines N] [--json]` | The full markdown section a chunk came from. |
-| `memsearch transcript PATH [--turn UUID] [--context N] [--json]` | Render the original conversation — including tool calls — from a Claude Code JSONL or a Codex rollout. |
-| `memsearch config get KEY` · `set KEY VALUE` · `list [--json]` | Read and write `config.toml`. |
-| `memsearch stats` | Chunk count, provider, model and last index time. |
-| `memsearch reset --yes` | Empty this project's index. The markdown is untouched. |
-| `memsearch hook …` | Internal: what the launchers exec. Always prints one JSON object and exits 0. |
+| `memsearch-mini --version` | Version of the installed package. |
+| `memsearch-mini index [PATHS]... [--force] [--skip-if-locked]` | Index markdown; defaults to the project's memory directory. `--force` re-embeds everything, `--skip-if-locked` returns at once when another indexer is running. |
+| `memsearch-mini search QUERY [-k N] [--json]` | Hybrid search: dense cosine + FTS5 keywords, fused with RRF. |
+| `memsearch-mini expand CHUNK_ID [--lines N] [--json]` | The full markdown section a chunk came from. |
+| `memsearch-mini transcript PATH [--turn UUID] [--context N] [--json]` | Render the original conversation — including tool calls — from a Claude Code JSONL or a Codex rollout. |
+| `memsearch-mini config get KEY` · `set KEY VALUE` · `list [--json]` | Read and write `config.toml`. |
+| `memsearch-mini stats` | Chunk count, provider, model and last index time. |
+| `memsearch-mini reset --yes` | Empty this project's index. The markdown is untouched. |
+| `memsearch-mini hook …` | Internal: what the launchers exec. Always prints one JSON object and exits 0. |
 
 Exit codes: `0` success, `1` runtime error, `2` usage error, `3` unrecognized transcript format.
 
 ## Troubleshooting
 
-- **Anything unexplained: read the sync log**, `~/.memsearch/venvs/<hash>.log`. Every sync appends a
+- **Anything unexplained: read the sync log**, `~/.memsearch-mini/venvs/<hash>.log`. Every sync appends a
   timestamped header there, and the log is truncated when it passes 1 MB.
 - **`installing runtime in the background` on every session** — the sync keeps failing. Read that
-  log, then run `bin/memsearch --sync` by hand to see the error in the foreground.
+  log, then run `bin/memsearch-mini --sync` by hand to see the error in the foreground.
 - **`index: not built yet — building in background` on every session** — the background indexer
   keeps failing (no network for the model download, a broken provider, a missing API key). Read
-  `~/.memsearch/index.log`, then run `bin/memsearch index` by hand to see the error in the foreground.
+  `~/.memsearch-mini/index.log`, then run `bin/memsearch-mini index` by hand to see the error in the foreground.
 - **`uv not found on PATH — memory disabled`** — install uv from <https://docs.astral.sh/uv/>. The
   hooks add `~/.local/bin`, `~/bin`, `/usr/local/bin` and `/opt/homebrew/bin` before giving up.
 - **`ERROR: <VAR> not set — memory search disabled`** — export the provider's key, or go back to the
-  local provider with `bin/memsearch config set embedding.provider onnx`.
-- **`ERROR: onnxruntime not installed`** — the runtime is incomplete: `bin/memsearch --sync`.
-- **Results look stale or wrong** — `bin/memsearch index --force` re-embeds everything. To start
-  clean, `bin/memsearch reset --yes` and index again; deleting `index.db` works too.
-- **Turn it off** — `MEMSEARCH_DISABLE=1` makes every launcher and hook print `{}` and exit.
-- **Relocate everything** — `MEMSEARCH_HOME=/somewhere/else` moves the whole directory;
+  local provider with `bin/memsearch-mini config set embedding.provider onnx`.
+- **`ERROR: onnxruntime not installed`** — the runtime is incomplete: `bin/memsearch-mini --sync`.
+- **Results look stale or wrong** — `bin/memsearch-mini index --force` re-embeds everything. To start
+  clean, `bin/memsearch-mini reset --yes` and index again; deleting `index.db` works too.
+- **Turn it off** — `MEMSEARCH_MINI_DISABLE=1` makes every launcher and hook print `{}` and exit.
+- **Relocate everything** — `MEMSEARCH_MINI_HOME=/somewhere/else` moves the whole directory;
   `UV_PROJECT_ENVIRONMENT` moves just the runtime environment (its log is always
   `<environment path>.log`). Useful when `$HOME` is on a filesystem you would rather keep small.
-- **`this SQLite build has no FTS5 module`** — set `MEMSEARCH_NO_FTS=1` for dense-vector search only,
+- **`this SQLite build has no FTS5 module`** — set `MEMSEARCH_MINI_NO_FTS=1` for dense-vector search only,
   or use a Python whose `sqlite3` was built with FTS5.
-- **A journal is being skipped** — files above `MEMSEARCH_MAX_FILE_MB` (default 8) are reported as
+- **A journal is being skipped** — files above `MEMSEARCH_MINI_MAX_FILE_MB` (default 8) are reported as
   failures and skipped; the rest of the run still succeeds. Raise the limit or split the file.
 - **Codex summaries look truncated** — the rollout text handed to the summarizer is capped at
-  `MEMSEARCH_SUMMARY_MAX_CHARS` characters (default 8000).
-- **A turn is missing from a journal** — look in `<project>/.memsearch/pending/`. A record there means
+  `MEMSEARCH_MINI_SUMMARY_MAX_CHARS` characters (default 8000).
+- **A turn is missing from a journal** — look in `<project>/.memsearch-mini/pending/`. A record there means
   its Stop hook died before writing; it is recovered at the next session start or turn end, once it
   is 150 s old. A `.working` suffix means the recovery is running right now.
 
@@ -332,33 +332,33 @@ Exit codes: `0` success, `1` runtime error, `2` usage error, `3` unrecognized tr
 Claude Code can run under two sandboxes at once: the harness's own `sandbox` block in `settings.json`
 (a write allowlist and a network filter that apply **only to the Bash tool**) and an outer wrapper
 such as bubblewrap that mounts everything read-only except a few paths. The plugin works under both
-once each layer knows about `$MEMSEARCH_HOME`.
+once each layer knows about `$MEMSEARCH_MINI_HOME`.
 
 ### Which layer runs what
 
 | Code path | Runs | Writes | Network |
 |---|---|---|---|
-| Hooks and the children they detach (`uv sync`, the indexer, `claude -p`) | outside the Bash sandbox, inside the wrapper | `~/.memsearch`, `<project>/.memsearch`, `~/.claude` (the summarizer's own state) | `claude -p` reaches the API; the first index downloads the model from `huggingface.co` |
-| `memory-recall` skill (`bin/memsearch search` / `expand` / `transcript`) | through the Bash tool, so inside the Bash sandbox | `~/.memsearch/uv-cache` — `uv run` refuses to start when its cache is read-only, even with `--frozen --no-sync` | none once the model is cached |
+| Hooks and the children they detach (`uv sync`, the indexer, `claude -p`) | outside the Bash sandbox, inside the wrapper | `~/.memsearch-mini`, `<project>/.memsearch-mini`, `~/.claude` (the summarizer's own state) | `claude -p` reaches the API; the first index downloads the model from `huggingface.co` |
+| `memory-recall` skill (`bin/memsearch-mini search` / `expand` / `transcript`) | through the Bash tool, so inside the Bash sandbox | `~/.memsearch-mini/uv-cache` — `uv run` refuses to start when its cache is read-only, even with `--frozen --no-sync` | none once the model is cached |
 | The plugin checkout | — | nothing, ever | — |
 
 ### settings.json
 
 ```json
-"permissions": { "deny": ["Edit(~/.memsearch/**)"] },
-"sandbox": { "filesystem": { "allowWrite": ["~/.memsearch/"] } }
+"permissions": { "deny": ["Edit(~/.memsearch-mini/**)"] },
+"sandbox": { "filesystem": { "allowWrite": ["~/.memsearch-mini/"] } }
 ```
 
 Write access, not just read — reading is allowed by default anyway. The `Edit` deny is optional
-defence in depth: nothing under `~/.memsearch` is meant to be hand-edited (`bin/memsearch config set`
+defence in depth: nothing under `~/.memsearch-mini` is meant to be hand-edited (`bin/memsearch-mini config set`
 covers the config). No extra network domain is needed: the model download runs in a hook child,
 outside the Bash filter. Allow `huggingface.co` and `*.hf.co` only if you want to run
-`bin/memsearch --sync` or `index` from the Bash tool before the background indexer has cached the
+`bin/memsearch-mini --sync` or `index` from the Bash tool before the background indexer has cached the
 model.
 
 ### An outer wrapper (bubblewrap and friends)
 
-Bind `~/.memsearch` writable and create it before the wrapper starts: a bind to a missing directory
+Bind `~/.memsearch-mini` writable and create it before the wrapper starts: a bind to a missing directory
 fails or is skipped, and `~` is read-only inside. `~/.claude` has to be writable for the harness
 itself, which already covers the plugin checkout under `~/.claude/plugins` (never written to) and
 the summarizer's transcripts.
@@ -369,23 +369,23 @@ it — exactly the children this plugin relies on. It is built to survive that:
 
 - **First install.** The detached `uv sync` (≈90 MB), the model download (a few hundred MB) and the
   first index all run in the background of the first session. Quit before they finish and the sync
-  lock (`~/.memsearch/venvs/<hash>.lock`) is left behind: sessions in the next 30 minutes give up at
+  lock (`~/.memsearch-mini/venvs/<hash>.lock`) is left behind: sessions in the next 30 minutes give up at
   once and print `installing runtime in the background` again, then the lock goes stale and the next
   session retries. The model download resumes from its `.incomplete` files. To skip the waiting, run
   the sync in the foreground, outside the wrapper, then keep one session open until
-  `~/.memsearch/index.log` shows the model arrived:
+  `~/.memsearch-mini/index.log` shows the model arrived:
 
   ```bash
-  ~/.claude/plugins/marketplaces/ativaone/bin/memsearch --sync   # Claude Code marketplace install
-  /path/to/memsearch-mini/bin/memsearch --sync                   # --plugin-dir, or Codex
+  ~/.claude/plugins/marketplaces/ativaone/bin/memsearch-mini --sync   # Claude Code marketplace install
+  /path/to/memsearch-mini/bin/memsearch-mini --sync                   # --plugin-dir, or Codex
   ```
 
 - **Indexer killed mid-run.** The next `SessionStart` sees journals newer than the index and
   reindexes.
-- **Stop hook killed mid-summary.** The hook records the turn under `<project>/.memsearch/pending/`
+- **Stop hook killed mid-summary.** The hook records the turn under `<project>/.memsearch-mini/pending/`
   before it starts `claude -p`; the next `SessionStart` or `Stop` in that project recovers it (see
   [Hooks](#hooks)). The summary lands in the journal of the day the turn happened, so quitting right
-  after an answer costs nothing but the delay. Wait for `[memsearch] turn captured` if the last
+  after an answer costs nothing but the delay. Wait for `[memsearch-mini] turn captured` if the last
   turn matters; `pending/` is empty when every turn has been written, so a status line can watch it
   if you want a permanent "still writing" marker.
 
@@ -400,12 +400,12 @@ survived an uninstall.
 | Location | What | Removed by |
 |---|---|---|
 | The plugin checkout | **Nothing.** It is read-only at runtime. | Deleting the clone / `/plugin uninstall` |
-| `~/.memsearch/` | Runtime environment, uv cache, downloaded interpreter, embedding model, `config.toml` | `uninstall.sh --purge`, or `rm -rf ~/.memsearch` |
-| `<project>/.memsearch/memory/*.md` | Your journals — **kept**, they are the source of truth | You, by hand |
-| `<project>/.memsearch/index.db`, `index.lock` | Derived index; safe to delete any time | `rm -f <project>/.memsearch/index.db* <project>/.memsearch/index.lock` |
-| `<project>/.memsearch/pending/` | Records of turns still being summarized; empty in a healthy install | Itself, or `rm -rf` |
+| `~/.memsearch-mini/` | Runtime environment, uv cache, downloaded interpreter, embedding model, `config.toml` | `uninstall.sh --purge`, or `rm -rf ~/.memsearch-mini` |
+| `<project>/.memsearch-mini/memory/*.md` | Your journals — **kept**, they are the source of truth | You, by hand |
+| `<project>/.memsearch-mini/index.db`, `index.lock` | Derived index; safe to delete any time | `rm -f <project>/.memsearch-mini/index.db* <project>/.memsearch-mini/index.lock` |
+| `<project>/.memsearch-mini/pending/` | Records of turns still being summarized; empty in a healthy install | Itself, or `rm -rf` |
 | `~/.codex/hooks.json`, `~/.agents/skills/memory-recall` | Codex wiring | `uninstall.sh` |
-| `$TMPDIR/memsearch-stop.*.json` | Transient Codex work files, deleted by the worker that reads them | Itself |
+| `$TMPDIR/memsearch-mini-stop.*.json` | Transient Codex work files, deleted by the worker that reads them | Itself |
 
 ### Claude Code
 
@@ -420,16 +420,16 @@ survived an uninstall.
 bash /path/to/memsearch-mini/uninstall.sh
 ```
 
-It removes only memsearch's own entries from `~/.codex/hooks.json`, and removes
-`~/.agents/skills/memory-recall` only if the skill there is actually memsearch's. It deliberately
+It removes only memsearch-mini's own entries from `~/.codex/hooks.json`, and removes
+`~/.agents/skills/memory-recall` only if the skill there is actually memsearch-mini's. It deliberately
 leaves `hooks = true` under `[features]` in `~/.codex/config.toml` alone, because other tools may
-depend on it. It also prints how much `~/.memsearch` is holding, and the two Claude Code commands
+depend on it. It also prints how much `~/.memsearch-mini` is holding, and the two Claude Code commands
 above.
 
 ### Then, for either host
 
 ```bash
-bash /path/to/memsearch-mini/uninstall.sh --purge   # or simply: rm -rf ~/.memsearch
+bash /path/to/memsearch-mini/uninstall.sh --purge   # or simply: rm -rf ~/.memsearch-mini
 ```
 
 That takes the runtime, the uv cache, any interpreter uv downloaded, the embedding model and your
@@ -469,18 +469,27 @@ uv tool uninstall memsearch     # the old standalone CLI, if you installed it
 
 Upstream also left the embedding model in the shared Hugging Face cache (usually
 `~/.cache/huggingface/hub/models--gpahal--bge-m3-onnx-int8`) and the PyPI package in uv's cache.
-This fork redownloads the model into `~/.memsearch/models/`, so the old copy is only worth keeping if
+This fork redownloads the model into `~/.memsearch-mini/models/`, so the old copy is only worth keeping if
 another tool of yours uses that cache.
 
 **Config** — keep `[embedding]` and `[chunking]` as they are. `[milvus]`, `[llm]`, `[reranker]` and
 `[plugins.*]` are no longer read (they are ignored, so you can leave them or delete them), and
-project-level `.memsearch.toml` files are gone: `~/.memsearch/config.toml` is the only layer.
+project-level `.memsearch.toml` files are gone: `~/.memsearch-mini/config.toml` is the only layer.
 Summarization is configured with `[claude]` / `[codex]` `summarize_enabled` and `summarize_model`
 instead of the old `[plugins.<agent>.summarize]` block. `prompts.summarize` still works.
 
-**Your journals carry over unchanged.** `.memsearch/memory/*.md` is the same format; the first
-session after installing sees no index, builds one in the background, and everything is searchable
-again. Chunk ids changed, but nothing on disk refers to them.
+**Your journals move with you.** The format is unchanged, but the directory is not — create
+`.memsearch-mini/` in each project and move the markdown across:
+
+```bash
+mkdir -p .memsearch-mini
+mv .memsearch/memory .memsearch-mini/memory                  # per project
+mv ~/.memsearch/config.toml ~/.memsearch-mini/config.toml    # optional, keeps your settings
+```
+
+The first session after that sees no index and builds one from the markdown in the background —
+SQLite only, nothing is read from Milvus — and everything is searchable again. Chunk ids changed,
+but nothing on disk refers to them.
 
 ## Upstream sync
 
@@ -512,7 +521,7 @@ uv run ruff format --check src tests
 CI (`.github/workflows/test.yml`) runs the same commands on Python 3.10 and 3.12, from the lockfile,
 which is the same path a user's install takes. A plain `uv sync` like the one above puts a `.venv` in
 the checkout, which is fine for development — the installed plugin never does that, it keeps its
-environment under `~/.memsearch/venvs/`.
+environment under `~/.memsearch-mini/venvs/`.
 
 **Release.** Bump the version in three files — `pyproject.toml`, `.claude-plugin/plugin.json`, and
 `.claude-plugin/marketplace.json` (both `metadata.version` and the plugin entry). `tests/test_packaging.py`

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from click.testing import CliRunner
 
-from memsearch.cli import cli
+from memsearch_mini.cli import cli
 
 COMMANDS = [
     ["index"],

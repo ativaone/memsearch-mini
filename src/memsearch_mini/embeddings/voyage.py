@@ -1,6 +1,6 @@
 """Voyage AI embedding provider.
 
-Requires: ``pip install 'memsearch[voyage]'`` or ``uv add 'memsearch[voyage]'``
+Requires: ``pip install 'memsearch-mini[voyage]'`` or ``uv add 'memsearch-mini[voyage]'``
 Environment variables:
     VOYAGE_API_KEY — required
 """

@@ -25,14 +25,14 @@ class EmbeddingProvider(Protocol):
 
 # Provider registry: name -> (module_path, class_name)
 _PROVIDERS: dict[str, tuple[str, str]] = {
-    "openai": ("memsearch.embeddings.openai", "OpenAIEmbedding"),
-    "google": ("memsearch.embeddings.google", "GoogleEmbedding"),
-    "voyage": ("memsearch.embeddings.voyage", "VoyageEmbedding"),
-    "jina": ("memsearch.embeddings.jina", "JinaEmbedding"),
-    "mistral": ("memsearch.embeddings.mistral", "MistralEmbedding"),
-    "ollama": ("memsearch.embeddings.ollama", "OllamaEmbedding"),
-    "local": ("memsearch.embeddings.local", "LocalEmbedding"),
-    "onnx": ("memsearch.embeddings.onnx", "OnnxEmbedding"),
+    "openai": ("memsearch_mini.embeddings.openai", "OpenAIEmbedding"),
+    "google": ("memsearch_mini.embeddings.google", "GoogleEmbedding"),
+    "voyage": ("memsearch_mini.embeddings.voyage", "VoyageEmbedding"),
+    "jina": ("memsearch_mini.embeddings.jina", "JinaEmbedding"),
+    "mistral": ("memsearch_mini.embeddings.mistral", "MistralEmbedding"),
+    "ollama": ("memsearch_mini.embeddings.ollama", "OllamaEmbedding"),
+    "local": ("memsearch_mini.embeddings.local", "LocalEmbedding"),
+    "onnx": ("memsearch_mini.embeddings.onnx", "OnnxEmbedding"),
 }
 
 # Default model for each provider (mirrors the __init__ defaults in each class).

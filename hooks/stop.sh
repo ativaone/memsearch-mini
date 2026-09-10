@@ -5,7 +5,7 @@ PLATFORM="${1:-claude}"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 hook_guard
 have_uv || {
-  printf '%s\n' '{"systemMessage": "[memsearch] uv not found on PATH — memory disabled (https://docs.astral.sh/uv/)"}'
+  printf '%s\n' '{"systemMessage": "[memsearch-mini] uv not found on PATH — memory disabled (https://docs.astral.sh/uv/)"}'
   exit 0
 }
 # No sync here: the first install belongs to SessionStart, and this turn is lost
@@ -15,4 +15,4 @@ venv_ready || {
   exit 0
 }
 # stdin is inherited untouched: Python reads the payload.
-exec "$ROOT/bin/memsearch" hook stop --platform "$PLATFORM"
+exec "$ROOT/bin/memsearch-mini" hook stop --platform "$PLATFORM"

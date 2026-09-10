@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Installer for the memsearch Codex CLI plugin.
+# Installer for the memsearch-mini Codex CLI plugin.
 #
 #   bash codex/install.sh
 #
-# Copies the memory-recall skill into ~/.agents/skills, merges the memsearch
+# Copies the memory-recall skill into ~/.agents/skills, merges the memsearch-mini
 # hook entries into ~/.codex/hooks.json and enables the hooks feature flag.
-# Set MEMSEARCH_SKIP_SYNC=1 to skip the blocking runtime sync.
+# Set MEMSEARCH_MINI_SKIP_SYNC=1 to skip the blocking runtime sync.
 set -euo pipefail
 
 INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -14,11 +14,11 @@ HOOKS_FILE="$CODEX_DIR/hooks.json"
 CONFIG_FILE="$CODEX_DIR/config.toml"
 SKILL_SRC="$INSTALL_DIR/codex/skills/memory-recall"
 SKILL_DST="$HOME/.agents/skills/memory-recall"
-MEMSEARCH_HOME="${MEMSEARCH_HOME:-$HOME/.memsearch}"
+MEMSEARCH_MINI_HOME="${MEMSEARCH_MINI_HOME:-$HOME/.memsearch-mini}"
 # Ask the library for the environment path instead of duplicating its hashing
 # rule; a subshell keeps this script's `set -e` away from the sourced file.
 VENV="$(bash -c 'source "$1/hooks/common.sh"; printf "%s\n" "$VENV"' _ "$INSTALL_DIR" 2>/dev/null || true)"
-[ -n "$VENV" ] || VENV="$MEMSEARCH_HOME/venvs"
+[ -n "$VENV" ] || VENV="$MEMSEARCH_MINI_HOME/venvs"
 
 # The JSON/TOML edits below are the only Python this installer needs. A system
 # python3 runs them when there is one; otherwise the interpreter uv manages for
@@ -130,7 +130,7 @@ def load_existing():
     return {"hooks": {}}
 
 
-def strip_old_memsearch(entries, script_name):
+def strip_old_memsearch_mini(entries, script_name):
     # Two markers: the upstream layout, and this plugin's layout at any
     # checkout path (so a moved or renamed clone leaves no duplicate behind).
     markers = (f"plugins/codex/hooks/{script_name}", f"/hooks/{script_name}")
@@ -156,7 +156,7 @@ hooks = data.setdefault("hooks", {})
 
 for event, details in spec.items():
     script = details["script"]
-    cleaned = strip_old_memsearch(hooks.get(event, []), script)
+    cleaned = strip_old_memsearch_mini(hooks.get(event, []), script)
     cleaned.append(
         {
             "matcher": "",
@@ -178,23 +178,23 @@ os.replace(tmp, hooks_file)
 PY
 }
 
-echo "=== memsearch Codex CLI plugin installer ==="
+echo "=== memsearch-mini Codex CLI plugin installer ==="
 echo "Checkout: $INSTALL_DIR"
 echo ""
 
 echo "[1/5] Checking uv..."
 if ! command -v uv >/dev/null 2>&1; then
-  echo "  ✗ uv not found. memsearch runs its CLI through uv; install it first:"
+  echo "  ✗ uv not found. memsearch-mini runs its CLI through uv; install it first:"
   echo "    https://docs.astral.sh/uv/getting-started/installation/"
   exit 1
 fi
 echo "  ✓ uv found: $(command -v uv)"
 
 echo "[2/5] Syncing the runtime (first run downloads the embedding stack)..."
-if [ "${MEMSEARCH_SKIP_SYNC:-}" = "1" ]; then
-  echo "  ⚠ MEMSEARCH_SKIP_SYNC=1 — skipped; the first session syncs in the background"
+if [ "${MEMSEARCH_MINI_SKIP_SYNC:-}" = "1" ]; then
+  echo "  ⚠ MEMSEARCH_MINI_SKIP_SYNC=1 — skipped; the first session syncs in the background"
 else
-  bash "$INSTALL_DIR/bin/memsearch" --sync
+  bash "$INSTALL_DIR/bin/memsearch-mini" --sync
 fi
 
 echo "[3/5] Installing the memory-recall skill..."
@@ -214,12 +214,12 @@ if [ -f "$HOOKS_FILE" ]; then
   echo "  ⚠ Existing hooks.json backed up to $HOOKS_FILE.bak"
 fi
 install_or_update_hooks_file "$HOOKS_FILE" "$INSTALL_DIR"
-echo "  ✓ memsearch hook entries written to $HOOKS_FILE"
+echo "  ✓ memsearch-mini hook entries written to $HOOKS_FILE"
 ensure_hooks_enabled "$CONFIG_FILE"
 echo "  ✓ hooks = true under [features] in $CONFIG_FILE"
 
 echo "[5/5] Setting permissions..."
-if chmod +x "$INSTALL_DIR/bin/memsearch" "$INSTALL_DIR/hooks/"*.sh "$INSTALL_DIR/codex/install.sh" 2>/dev/null; then
+if chmod +x "$INSTALL_DIR/bin/memsearch-mini" "$INSTALL_DIR/hooks/"*.sh "$INSTALL_DIR/codex/install.sh" 2>/dev/null; then
   echo "  ✓ Scripts marked executable"
 else
   echo "  ⚠ Could not change permissions (read-only checkout?) — the hooks are run through bash, so this is harmless"
@@ -234,9 +234,9 @@ echo "  • Stop: summarizes the turn and appends it to today's journal"
 echo "  • UserPromptSubmit: reminds Codex that recall is available"
 echo "  • memory-recall skill: searches past sessions when it is relevant"
 echo ""
-echo "Memory files:   <project>/.memsearch/memory/*.md"
-echo "Index:          <project>/.memsearch/index.db  (derived, rebuildable)"
-echo "Runtime home:   $MEMSEARCH_HOME"
+echo "Memory files:   <project>/.memsearch-mini/memory/*.md"
+echo "Index:          <project>/.memsearch-mini/index.db  (derived, rebuildable)"
+echo "Runtime home:   $MEMSEARCH_MINI_HOME"
 echo "                everything downloaded lives there: venv, uv cache, python,"
 echo "                embedding models and config.toml. Nothing else is written"
 echo "                outside your projects, so uninstalling reclaims it all."
@@ -246,5 +246,5 @@ echo "Skill:          $SKILL_DST"
 echo ""
 echo "To uninstall:"
 echo "  bash $INSTALL_DIR/uninstall.sh            # unwire the hooks, remove the skill"
-echo "  bash $INSTALL_DIR/uninstall.sh --purge    # the same, plus rm -rf $MEMSEARCH_HOME"
-echo "  then delete this checkout; project journals under .memsearch/ stay untouched"
+echo "  bash $INSTALL_DIR/uninstall.sh --purge    # the same, plus rm -rf $MEMSEARCH_MINI_HOME"
+echo "  then delete this checkout; project journals under .memsearch-mini/ stay untouched"

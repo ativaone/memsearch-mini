@@ -20,7 +20,7 @@ from .transcript import strip_harness_tags
 
 # What the upstream parsers print instead of a transcript. Never summarized.
 SENTINELS = frozenset({"(empty transcript)", "(empty rollout)", "(no user message found)", "(empty turn)"})
-MAX_CONTENT_CHARS = 8000  # env override: MEMSEARCH_SUMMARY_MAX_CHARS
+MAX_CONTENT_CHARS = 8000  # env override: MEMSEARCH_MINI_SUMMARY_MAX_CHARS
 LAST_MESSAGE_CHARS = 4000
 MECHANICAL_CHARS = 800
 USER_QUESTION_CHARS = 200
@@ -215,7 +215,7 @@ def _codex_turn(path: Path | None, session_id: str, last_message: str) -> Parsed
         content = f"[User]: {question}"
     else:
         content = ""
-    raw_limit = os.environ.get("MEMSEARCH_SUMMARY_MAX_CHARS") or ""
+    raw_limit = os.environ.get("MEMSEARCH_MINI_SUMMARY_MAX_CHARS") or ""
     limit = int(raw_limit) if raw_limit.isdigit() else MAX_CONTENT_CHARS
     return ParsedTurn(
         text=_truncate(content, limit, "...(truncated)"),
@@ -269,13 +269,13 @@ def _summarizer_command(platform: str, model: str, prompt: str, text: str) -> tu
         argv = ["codex", "exec", "--ephemeral", "--skip-git-repo-check", "-s", "read-only"]
         argv += ["-c", "features.hooks=false", "-c", 'model_reasoning_effort="low"', "-m", model]
         argv.append(f"{prompt}\n\nHere is the transcript:\n\n{text}")
-        return argv, b"", {"MEMSEARCH_DISABLE": "1", "MEMSEARCH_IN_STOP_WORKER": "1"}
+        return argv, b"", {"MEMSEARCH_MINI_DISABLE": "1", "MEMSEARCH_MINI_IN_STOP_WORKER": "1"}
     argv = ["claude", "-p"]
     if _claude_safe_mode():
         argv.append("--safe-mode")
     argv += ["--strict-mcp-config", "--tools", "", "--model", model, "--no-session-persistence", "--no-chrome"]
     # The prompt travels on stdin so transcript size never reaches argv limits.
-    return argv, f"{prompt}\n\nTranscript:\n{text}".encode(), {"MEMSEARCH_DISABLE": "1", "CLAUDECODE": ""}
+    return argv, f"{prompt}\n\nTranscript:\n{text}".encode(), {"MEMSEARCH_MINI_DISABLE": "1", "CLAUDECODE": ""}
 
 
 def summarize(
@@ -334,7 +334,7 @@ def unavailable_line(reason: str) -> str:
 
 
 def load_prompt(cfg, platform: str, project_dir: str | os.PathLike[str] | None = None) -> str:
-    """Custom template (config) > ``$MEMSEARCH_PLUGIN_ROOT/prompts/summarize.txt`` > built-in."""
+    """Custom template (config) > ``$MEMSEARCH_MINI_PLUGIN_ROOT/prompts/summarize.txt`` > built-in."""
     text = ""
     custom = (getattr(cfg.prompts, "summarize", "") or "").strip()
     if custom:
@@ -342,7 +342,7 @@ def load_prompt(cfg, platform: str, project_dir: str | os.PathLike[str] | None =
         if not path.is_absolute() and project_dir:
             path = Path(project_dir) / path
         text = _read_text(path)
-    root = os.environ.get("MEMSEARCH_PLUGIN_ROOT", "")
+    root = os.environ.get("MEMSEARCH_MINI_PLUGIN_ROOT", "")
     if not text and root:
         text = _read_text(Path(root) / "prompts" / "summarize.txt")
     return (text or FALLBACK_PROMPT).rstrip().replace("{{AGENT_NAME}}", AGENT_NAMES.get(platform, platform))

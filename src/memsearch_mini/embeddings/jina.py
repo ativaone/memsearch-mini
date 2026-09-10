@@ -1,6 +1,6 @@
 """Jina AI embedding provider.
 
-Requires: ``pip install 'memsearch[jina]'`` or ``uv add 'memsearch[jina]'``
+Requires: ``pip install 'memsearch-mini[jina]'`` or ``uv add 'memsearch-mini[jina]'``
 Environment variables:
     JINA_API_KEY — required
 
@@ -9,7 +9,7 @@ this provider talks to ``https://api.jina.ai/v1/embeddings`` directly via
 httpx. The default model is the latest ``jina-embeddings-v4`` (2048-dim,
 Matryoshka-truncatable between 256 and 2048).
 
-The ``task`` parameter activates a task-specific LoRA adapter. memsearch
+The ``task`` parameter activates a task-specific LoRA adapter. memsearch-mini
 embeds stored chunks and user queries through the same ``embed()`` call, so
 we default to ``retrieval.passage`` — the common case for indexing a memory
 corpus. Override via the constructor if you need query- or code-specific

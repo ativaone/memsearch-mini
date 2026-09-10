@@ -33,10 +33,10 @@ local = ["einops>=0.8.2", "sentence-transformers>=3.0"]
 all = ["memsearch-mini[onnx,openai,google,voyage,jina,mistral,ollama,local]"]
 
 [project.scripts]
-memsearch = "memsearch.cli:cli"
+memsearch-mini = "memsearch_mini.cli:cli"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/memsearch"]
+packages = ["src/memsearch_mini"]
 
 [dependency-groups]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.9"]
@@ -55,7 +55,7 @@ select = ["E", "W", "F", "I", "UP", "B", "C4", "SIM", "PIE", "PGH", "RUF", "T20"
 ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["memsearch"]
+known-first-party = ["memsearch_mini"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["T20"]

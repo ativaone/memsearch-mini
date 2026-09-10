@@ -1,12 +1,12 @@
 """Tests for ``uninstall.sh``.
 
 Uninstalling has to be complete and surgical at the same time: everything the
-plugin ever downloaded lives under ``$MEMSEARCH_HOME`` and goes away with
+plugin ever downloaded lives under ``$MEMSEARCH_MINI_HOME`` and goes away with
 ``--purge``, while hook entries and skills that belong to other tools — and
 every project journal — survive untouched.
 
-``HOME`` and ``MEMSEARCH_HOME`` both point inside ``tmp_path``, so no test can
-reach the real ``~/.codex``, ``~/.agents`` or ``~/.memsearch``.
+``HOME`` and ``MEMSEARCH_MINI_HOME`` both point inside ``tmp_path``, so no test can
+reach the real ``~/.codex``, ``~/.agents`` or ``~/.memsearch-mini``.
 """
 
 from __future__ import annotations
@@ -100,7 +100,7 @@ class Uninstaller:
 
     def fill_runtime_home(self) -> None:
         (self.ms_home / "venvs" / "abc123def456" / "bin").mkdir(parents=True, exist_ok=True)
-        (self.ms_home / "venvs" / "abc123def456" / "bin" / "memsearch").write_text("#!/bin/sh\n", encoding="utf-8")
+        (self.ms_home / "venvs" / "abc123def456" / "bin" / "memsearch-mini").write_text("#!/bin/sh\n", encoding="utf-8")
         (self.ms_home / "uv-cache").mkdir(parents=True, exist_ok=True)
         (self.ms_home / "models" / "hub").mkdir(parents=True, exist_ok=True)
         (self.ms_home / "config.toml").write_text('[embedding]\nprovider = "onnx"\n', encoding="utf-8")
@@ -119,7 +119,7 @@ def uninstaller(tmp_path: Path) -> Uninstaller:
     (root / "uv.lock").write_text("version = 1\n", encoding="utf-8")
 
     home = tmp_path / "home"
-    (home / ".memsearch").mkdir(parents=True, exist_ok=True)
+    (home / ".memsearch-mini").mkdir(parents=True, exist_ok=True)
     logs = tmp_path / "logs"
     logs.mkdir(exist_ok=True)
     ms_home = tmp_path / "ms-home"
@@ -134,7 +134,7 @@ def uninstaller(tmp_path: Path) -> Uninstaller:
         "HOME": str(home),
         "TMPDIR": str(tmp_path / "tmp"),
         "LANG": "C.UTF-8",
-        "MEMSEARCH_HOME": str(ms_home),
+        "MEMSEARCH_MINI_HOME": str(ms_home),
         "FAKE_UV_LOG": str(logs / "uv.log"),
         "FAKE_PYTHON": sys.executable,
     }
@@ -250,7 +250,7 @@ def test_codex_feature_flag_is_never_touched(uninstaller: Uninstaller) -> None:
 
 
 def test_removes_our_skill(uninstaller: Uninstaller) -> None:
-    uninstaller.install_skill(f"---\nname: memory-recall\n---\nRun {uninstaller.root}/bin/memsearch search\n")
+    uninstaller.install_skill(f"---\nname: memory-recall\n---\nRun {uninstaller.root}/bin/memsearch-mini search\n")
 
     result = uninstaller.run()
 
@@ -264,7 +264,7 @@ def test_keeps_a_foreign_skill_of_the_same_name(uninstaller: Uninstaller) -> Non
     result = uninstaller.run()
 
     assert uninstaller.skill_dir.exists()
-    assert "not a memsearch skill" in result.stdout
+    assert "not a memsearch-mini skill" in result.stdout
 
 
 # --- runtime home -------------------------------------------------------------
@@ -291,7 +291,7 @@ def test_without_purge_the_runtime_home_stays_and_is_explained(uninstaller: Unin
 
 
 def test_purge_never_touches_project_journals(uninstaller: Uninstaller, tmp_path: Path) -> None:
-    project = tmp_path / "some-project" / ".memsearch"
+    project = tmp_path / "some-project" / ".memsearch-mini"
     (project / "memory").mkdir(parents=True)
     journal = project / "memory" / "2026-09-09.md"
     journal.write_text("## Session 10:00\n\n- kept\n", encoding="utf-8")

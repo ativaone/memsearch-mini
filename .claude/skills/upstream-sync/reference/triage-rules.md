@@ -7,14 +7,17 @@
 | `src/memsearch/chunker.py` | same file, kept verbatim except `compute_chunk_id` (no model component) | CJK splitting, heading handling, size limits all apply |
 | `src/memsearch/embeddings/*` | same files | provider bugs, dimension probing, batching, ONNX inputs apply; `get_provider` forwards kwargs by signature introspection here |
 | `src/memsearch/transcript.py` | same file minus OpenClaw, plus harness-tag stripping | L3 deep-drill; Claude + Codex formats |
-| `src/memsearch/config.py` | rewritten: one file `~/.memsearch/config.toml`, no project layer, no `env:` refs | only the concept of a config bug transfers |
+| `src/memsearch/config.py` | rewritten: one file `~/.memsearch-mini/config.toml`, no project layer, no `env:` refs | only the concept of a config bug transfers |
 | `src/memsearch/store.py`, `core.py` | rewritten: SQLite + FTS5 + numpy, `index_paths()` | search/index *semantics* bugs (stale chunks, deleted files, dedup, score normalisation) transfer; anything about Milvus does not |
 | `src/memsearch/cli.py` | rewritten, 9 commands | flag names differ; check the fork's `--help` before assuming a flag exists |
-| `plugins/claude-code/hooks/*.sh`, `plugins/codex/hooks/*.sh`, `parse-transcript.sh`, `parse-rollout.sh` | `hooks/*.sh` (thin launchers) + `src/memsearch/hooks.py` + `capture.py` | hook *behaviour* bugs transfer (stdin handling, recursion guards, journal format, summarizer invocation, project-root resolution); bash-specific bugs usually vanished with the rewrite — verify before recording `already-covered` |
+| `plugins/claude-code/hooks/*.sh`, `plugins/codex/hooks/*.sh`, `parse-transcript.sh`, `parse-rollout.sh` | `hooks/*.sh` (thin launchers) + `src/memsearch_mini/hooks.py` + `capture.py` | hook *behaviour* bugs transfer (stdin handling, recursion guards, journal format, summarizer invocation, project-root resolution); bash-specific bugs usually vanished with the rewrite — verify before recording `already-covered` |
 | `plugins/claude-code/skills/memory-recall`, `plugins/codex/skills/memory-recall` | `skills/memory-recall`, `codex/skills/memory-recall` | |
 | `plugins/_shared/prompts/summarize.txt` | `prompts/summarize.txt` | |
 | `plugins/codex/scripts/install.sh` | `codex/install.sh`, `uninstall.sh` | |
 | `README.md`, `docs/platforms/{claude-code,codex}` | `README.md` only | port a doc fix only if the fork's README makes the same claim |
+
+Paths in the first column are upstream's. This fork's package is `src/memsearch_mini/`, so an
+upstream `src/memsearch/<module>.py` is `src/memsearch_mini/<module>.py` here.
 
 ## What the fork removed (reports against these are `not-applicable`)
 
@@ -29,7 +32,7 @@ self-install, mkdocs site, release workflows, Windows.
 
 A report that mentions one of these by name can still describe a *concept* the fork shares (for
 example "watch pidfile inside the watched dir breaks worktrees" is about where state lives, and the
-fork keeps `index.lock` inside `.memsearch/`). Read the concept, then decide.
+fork keeps `index.lock` inside `.memsearch-mini/`). Read the concept, then decide.
 
 ## Verdict procedure
 

@@ -17,8 +17,8 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from memsearch import cli as cli_module
-from memsearch.cli import cli
+from memsearch_mini import cli as cli_module
+from memsearch_mini.cli import cli
 
 JOURNAL_OLD = """# 2026-09-08
 
@@ -81,7 +81,7 @@ def wired(tmp_path, monkeypatch, fake_embedder):
 @pytest.fixture
 def project(wired):
     """*wired*, with two daily journals already in the memory directory."""
-    memory = wired / ".memsearch" / "memory"
+    memory = wired / ".memsearch-mini" / "memory"
     memory.mkdir(parents=True)
     (memory / "2026-09-08.md").write_text(JOURNAL_OLD, encoding="utf-8")
     (memory / "2026-09-09.md").write_text(JOURNAL_NEW, encoding="utf-8")
@@ -116,7 +116,7 @@ def test_version_reports_the_package_version() -> None:
 
 
 def test_python_dash_m_runs_the_cli() -> None:
-    proc = subprocess.run([sys.executable, "-m", "memsearch", "--version"], capture_output=True)
+    proc = subprocess.run([sys.executable, "-m", "memsearch_mini", "--version"], capture_output=True)
 
     assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
     assert "0.1.0" in proc.stdout.decode("utf-8")
@@ -131,12 +131,12 @@ def test_index_summarises_the_run_and_stats_agrees(project) -> None:
     assert result.exit_code == 0
     assert result.stdout.strip() == "Indexed 3 chunks from 2 files"
     stats = run("stats").stdout
-    assert f"Index: {project / '.memsearch' / 'index.db'}" in stats
+    assert f"Index: {project / '.memsearch-mini' / 'index.db'}" in stats
     assert "Chunks: 3" in stats
     assert "Sources: 2" in stats
     assert "Embedding: onnx/fake-embed (dimension 8)" in stats
     assert "Last indexed: 20" in stats  # an ISO stamp, not "never"
-    assert f"Memory dir: {project / '.memsearch' / 'memory'}" in stats
+    assert f"Memory dir: {project / '.memsearch-mini' / 'memory'}" in stats
 
 
 def test_index_creates_the_memory_directory_when_missing(wired) -> None:
@@ -144,7 +144,7 @@ def test_index_creates_the_memory_directory_when_missing(wired) -> None:
 
     assert result.exit_code == 0
     assert result.stdout.strip() == "Indexed 0 chunks from 0 files"
-    assert (wired / ".memsearch" / "memory").is_dir()
+    assert (wired / ".memsearch-mini" / "memory").is_dir()
 
 
 def test_index_is_incremental_and_force_re_embeds(project) -> None:
@@ -155,7 +155,7 @@ def test_index_is_incremental_and_force_re_embeds(project) -> None:
 
 
 def test_index_accepts_explicit_paths(project) -> None:
-    result = run("index", str(project / ".memsearch" / "memory" / "2026-09-09.md"))
+    result = run("index", str(project / ".memsearch-mini" / "memory" / "2026-09-09.md"))
 
     assert result.exit_code == 0
     assert result.stdout.strip() == "Indexed 1 chunks from 1 files"
@@ -168,7 +168,7 @@ def test_index_rejects_a_missing_path(project) -> None:
 
 
 def test_index_reports_failed_files_and_exits_one(project, monkeypatch) -> None:
-    monkeypatch.setenv("MEMSEARCH_MAX_FILE_MB", "0.00001")
+    monkeypatch.setenv("MEMSEARCH_MINI_MAX_FILE_MB", "0.00001")
 
     result = run("index")
 
@@ -178,7 +178,7 @@ def test_index_reports_failed_files_and_exits_one(project, monkeypatch) -> None:
 
 
 def test_index_skips_a_locked_project_and_releases_its_own_lock(project) -> None:
-    lock = project / ".memsearch" / "index.lock"
+    lock = project / ".memsearch-mini" / "index.lock"
     with open(lock, "a") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         skipped = run("index", "--skip-if-locked")
@@ -201,7 +201,7 @@ def test_search_prints_human_readable_results(project) -> None:
 
     assert result.exit_code == 0
     assert "--- Result 1 (score: 0." in result.stdout
-    assert f"Source: {project / '.memsearch' / 'memory' / '2026-09-08.md'}" in result.stdout
+    assert f"Source: {project / '.memsearch-mini' / 'memory' / '2026-09-08.md'}" in result.stdout
     assert "Heading: 09:00" in result.stdout
     assert "- Edgar chose SQLite with FTS5 for the derived index." in result.stdout
     assert result.stdout.count("--- Result ") <= 2
@@ -220,12 +220,12 @@ def test_search_json_uses_the_documented_key_order(project) -> None:
 
 def test_search_truncates_long_chunks_and_points_at_expand(project) -> None:
     long_section = "# 2026-09-10\n\n## Session 10:00\n\n### 10:00\n" + "- lorem ipsum dolor sit amet elit\n" * 40
-    (project / ".memsearch" / "memory" / "2026-09-10.md").write_text(long_section, encoding="utf-8")
+    (project / ".memsearch-mini" / "memory" / "2026-09-10.md").write_text(long_section, encoding="utf-8")
     run("index")
 
     output = run("search", "lorem ipsum dolor").stdout
 
-    assert "... [truncated, run 'memsearch expand " in output
+    assert "... [truncated, run 'memsearch-mini expand " in output
 
 
 def test_search_on_an_empty_index_says_so(wired) -> None:
@@ -439,7 +439,7 @@ def test_reset_asks_for_confirmation(project) -> None:
 
 
 def test_search_and_expand_keep_non_ascii_content(project) -> None:
-    (project / ".memsearch" / "memory" / "2026-09-11.md").write_text(
+    (project / ".memsearch-mini" / "memory" / "2026-09-11.md").write_text(
         "# 2026-09-11\n\n## Session 12:00\n\n### 12:00\n- Edgar perguntou sobre 非拉丁字符 e Amyloid-β.\n",
         encoding="utf-8",
     )

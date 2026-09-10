@@ -1,4 +1,4 @@
-"""Configuration: a single TOML file at ~/.memsearch/config.toml.
+"""Configuration: a single TOML file at ~/.memsearch-mini/config.toml.
 
 There is deliberately only one layer. Provider SDKs read their own environment
 variables (OPENAI_API_KEY, ...); ``embedding.api_key`` is an optional literal.
@@ -32,18 +32,18 @@ _API_KEY_ENV = {
 
 
 def home_dir() -> Path:
-    """Everything the plugin writes outside a project lives here (default ~/.memsearch).
+    """Everything the plugin writes outside a project lives here (default ~/.memsearch-mini).
 
-    ``MEMSEARCH_HOME`` relocates it; ``hooks/common.sh`` points the uv cache, the
+    ``MEMSEARCH_MINI_HOME`` relocates it; ``hooks/common.sh`` points the uv cache, the
     project venv and the model cache under it too, so uninstalling is one ``rm -rf``.
     """
-    override = os.environ.get("MEMSEARCH_HOME")
-    return Path(override).expanduser() if override else Path("~/.memsearch").expanduser()
+    override = os.environ.get("MEMSEARCH_MINI_HOME")
+    return Path(override).expanduser() if override else Path("~/.memsearch-mini").expanduser()
 
 
 def config_path() -> Path:
-    """Resolved at call time so tests can point MEMSEARCH_CONFIG at a temp file."""
-    override = os.environ.get("MEMSEARCH_CONFIG")
+    """Resolved at call time so tests can point MEMSEARCH_MINI_CONFIG at a temp file."""
+    override = os.environ.get("MEMSEARCH_MINI_CONFIG")
     if override:
         return Path(override).expanduser()
     return home_dir() / "config.toml"

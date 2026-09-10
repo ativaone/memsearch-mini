@@ -29,8 +29,8 @@ def _install_fake_google_genai(monkeypatch, *, record: dict):
 
 
 def _load_google_embedding_module():
-    sys.modules.pop("memsearch.embeddings.google", None)
-    return importlib.import_module("memsearch.embeddings.google")
+    sys.modules.pop("memsearch_mini.embeddings.google", None)
+    return importlib.import_module("memsearch_mini.embeddings.google")
 
 
 def test_google_embedding_uses_vertex_ai_when_env_var_is_true(monkeypatch):
