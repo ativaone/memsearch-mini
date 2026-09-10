@@ -220,6 +220,9 @@ summarize_model = "gpt-5.1-codex-mini"   # passed to `codex exec -m`
 
 [prompts]
 summarize = ""        # path to a custom template; {{AGENT_NAME}} is substituted
+
+[memory]
+filename_suffix = ""  # "hostname" writes YYYY-MM-DD-<host>.md, for a memory folder synced between machines
 ```
 
 Read and write it with the CLI, always through the launcher in the plugin directory (for a

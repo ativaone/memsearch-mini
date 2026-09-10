@@ -596,6 +596,12 @@ def test_claude_stop_never_journals_a_rate_limit_notice(project, spawns, tmp_pat
     assert "hit your limit" not in text
 
 
+def test_recent_memory_includes_suffixed_journals(project, spawns):
+    context = _context(project, {"2026-03-02-laptop.md": "## Session 09:00\n### 09:00\n- from the laptop\n"})
+    assert "from the laptop" in context
+    assert "## 2026-03-02-laptop.md" in context
+
+
 # --- stop: Codex two-phase ---------------------------------------------------
 
 

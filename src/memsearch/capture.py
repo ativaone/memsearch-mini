@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
@@ -324,6 +325,18 @@ def load_prompt(cfg, platform: str, project_dir: str | os.PathLike[str] | None =
     return (text or FALLBACK_PROMPT).rstrip().replace("{{AGENT_NAME}}", AGENT_NAMES.get(platform, platform))
 
 
+def journal_suffix(cfg) -> str:
+    """Per-writer filename suffix: "" (default) or "-<short hostname>" when configured.
+
+    Two machines appending to one synced memory folder would otherwise overwrite each other's
+    daily file; a suffix gives each writer its own journal while search still sees them all.
+    """
+    if getattr(cfg.memory, "filename_suffix", "") != "hostname":
+        return ""
+    host = re.sub(r"[^A-Za-z0-9_-]", "-", socket.gethostname().split(".")[0]).strip("-")
+    return f"-{host}" if host else ""
+
+
 def append_to_journal(
     memory_dir: str | os.PathLike[str],
     *,
@@ -333,12 +346,13 @@ def append_to_journal(
     summary: str,
     anchor_kind: str = "transcript",
     now: datetime | None = None,
+    suffix: str = "",
 ) -> Path:
-    """Append one entry to ``<memory_dir>/YYYY-MM-DD.md``, with a single write."""
+    """Append one entry to ``<memory_dir>/YYYY-MM-DD<suffix>.md``, with a single write."""
     stamp = now or datetime.now()
     directory = Path(memory_dir)
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{stamp:%Y-%m-%d}.md"
+    path = directory / f"{stamp:%Y-%m-%d}{suffix}.md"
     clock = f"{stamp:%H:%M}"
     # The anchor comment doubles as the "session heading already written" marker.
     lazy = not session_id or f"session:{session_id}" not in _read_text(path)

@@ -614,3 +614,21 @@ def test_journal_creates_the_memory_directory(tmp_path):
     _append(memory)
 
     assert memory.is_dir()
+
+
+def test_journal_suffix_is_empty_by_default_and_uses_the_short_hostname(monkeypatch):
+    """Upstream #720: two machines sharing one synced memory folder must not overwrite each other."""
+    from memsearch import config
+
+    cfg = config.Config()
+    assert capture.journal_suffix(cfg) == ""
+    cfg.memory.filename_suffix = "hostname"
+    monkeypatch.setattr(capture.socket, "gethostname", lambda: "Mac.Studio.local")
+    assert capture.journal_suffix(cfg) == "-Mac"
+
+
+def test_append_to_journal_honours_the_suffix(tmp_path):
+    path = capture.append_to_journal(
+        tmp_path, session_id="s", turn_uuid="u", transcript_path="/t", summary="- x", suffix="-host1"
+    )
+    assert path.name.endswith("-host1.md") and path.name[:10].count("-") == 2

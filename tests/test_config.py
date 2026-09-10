@@ -59,6 +59,15 @@ def test_defaults_match_the_documented_configuration():
     assert (cfg.claude.summarize_enabled, cfg.claude.summarize_model) == (True, "haiku")
     assert (cfg.codex.summarize_enabled, cfg.codex.summarize_model) == (True, "gpt-5.1-codex-mini")
     assert cfg.prompts.summarize == ""
+    assert cfg.memory.filename_suffix == ""
+
+
+def test_filename_suffix_accepts_only_documented_choices(tmp_path):
+    path = tmp_path / "c.toml"
+    assert set_value("memory.filename_suffix", "hostname", path) == "hostname"
+    assert set_value("memory.filename_suffix", "", path) == ""
+    with pytest.raises(ValueError):
+        set_value("memory.filename_suffix", "project", path)
 
 
 def test_load_returns_defaults_when_no_file_exists(tmp_path):
@@ -245,7 +254,7 @@ def test_to_dict_is_a_plain_nested_mapping():
     data = to_dict(Config())
     assert data["embedding"]["provider"] == "onnx"
     assert data["claude"] == {"summarize_enabled": True, "summarize_model": "haiku"}
-    assert set(data) == {"embedding", "chunking", "claude", "codex", "prompts"}
+    assert set(data) == {"embedding", "chunking", "claude", "codex", "prompts", "memory"}
 
 
 def test_the_module_exposes_no_legacy_milvus_settings():

@@ -31,7 +31,7 @@ from . import capture, config
 RECENT_MEMORY_MAX_LINES = 40
 # Claude Code head-truncates inline hook context at roughly 2 KB; stay under it.
 RECENT_MEMORY_MAX_BYTES = 1800
-_DAILY_JOURNAL = re.compile(r"^\d{4}-\d{2}-\d{2}\.md$")
+_DAILY_JOURNAL = re.compile(r"^\d{4}-\d{2}-\d{2}(-[A-Za-z0-9_-]+)?\.md$")  # optional per-writer suffix
 _H2 = re.compile(r"^##\s")
 _H34 = re.compile(r"^#{3,4}\s")
 _BULLET = re.compile(r"^-\s")
@@ -382,6 +382,7 @@ def _summarize_and_append(cfg, platform: str, turn, memory: Path, project_dir: P
         summary=summary,
         anchor_kind="rollout" if platform == "codex" else "transcript",
         now=now,
+        suffix=capture.journal_suffix(cfg),
     )
 
 

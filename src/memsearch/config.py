@@ -76,12 +76,18 @@ class PromptsConfig:
 
 
 @dataclass
+class MemoryConfig:
+    filename_suffix: str = ""  # "" or "hostname": YYYY-MM-DD-<host>.md keeps synced folders from colliding
+
+
+@dataclass
 class Config:
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
     claude: AgentConfig = field(default_factory=lambda: AgentConfig(summarize_model="haiku"))
     codex: AgentConfig = field(default_factory=lambda: AgentConfig(summarize_model="gpt-5.1-codex-mini"))
     prompts: PromptsConfig = field(default_factory=PromptsConfig)
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
 
     def effective_model(self) -> str:
         if self.embedding.model:
@@ -99,6 +105,7 @@ class Config:
 
 _INT_FIELDS = {"max_chunk_size", "overlap_lines", "batch_size"}
 _BOOL_FIELDS = {"summarize_enabled"}
+_CHOICE_FIELDS = {"filename_suffix": ("", "hostname")}
 
 
 def load_raw(path: Path | None = None) -> dict[str, Any]:
@@ -162,6 +169,8 @@ def coerce(name: str, value: str) -> Any:
         if lowered in {"0", "false", "no", "off"}:
             return False
         raise ValueError(f"Expected a boolean for {name}, got {value!r}")
+    if name in _CHOICE_FIELDS and value not in _CHOICE_FIELDS[name]:
+        raise ValueError(f"Expected one of {_CHOICE_FIELDS[name]!r} for {name}, got {value!r}")
     return value
 
 
