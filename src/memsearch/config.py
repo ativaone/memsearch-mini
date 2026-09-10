@@ -62,6 +62,7 @@ class EmbeddingConfig:
 class ChunkingConfig:
     max_chunk_size: int = 1500
     overlap_lines: int = 2
+    min_chunk_size: int = 0  # > 0 merges consecutive small sections up to this size
 
 
 @dataclass
@@ -103,7 +104,7 @@ class Config:
         return cfg
 
 
-_INT_FIELDS = {"max_chunk_size", "overlap_lines", "batch_size"}
+_INT_FIELDS = {"max_chunk_size", "overlap_lines", "min_chunk_size", "batch_size"}
 _BOOL_FIELDS = {"summarize_enabled"}
 _CHOICE_FIELDS = {"filename_suffix": ("", "hostname")}
 

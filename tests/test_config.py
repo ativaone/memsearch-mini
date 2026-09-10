@@ -55,7 +55,7 @@ def test_defaults_match_the_documented_configuration():
     cfg = Config()
     assert (cfg.embedding.provider, cfg.embedding.model) == ("onnx", "")
     assert (cfg.embedding.api_key, cfg.embedding.base_url, cfg.embedding.batch_size) == ("", "", 0)
-    assert (cfg.chunking.max_chunk_size, cfg.chunking.overlap_lines) == (1500, 2)
+    assert (cfg.chunking.max_chunk_size, cfg.chunking.overlap_lines, cfg.chunking.min_chunk_size) == (1500, 2, 0)
     assert (cfg.claude.summarize_enabled, cfg.claude.summarize_model) == (True, "haiku")
     assert (cfg.codex.summarize_enabled, cfg.codex.summarize_model) == (True, "gpt-5.1-codex-mini")
     assert cfg.prompts.summarize == ""

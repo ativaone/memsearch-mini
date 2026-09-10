@@ -77,12 +77,16 @@ def chunk_markdown(
     *,
     max_chunk_size: int = 1500,
     overlap_lines: int = 2,
+    min_chunk_size: int = 0,
 ) -> list[Chunk]:
     """Split markdown *text* into chunks, breaking on headings.
 
     Chunks that exceed *max_chunk_size* characters are split further at
     paragraph boundaries.  A small *overlap_lines* context is carried
-    forward to preserve continuity.
+    forward to preserve continuity.  With *min_chunk_size* > 0, consecutive
+    sections are merged until the group reaches that size (never crossing
+    *max_chunk_size*): journals are many ``### HH:MM`` sections of a few
+    bullets, and one chunk per session reads better than one per turn.
     """
     lines = text.split("\n")
     # Find all heading positions
@@ -103,23 +107,28 @@ def chunk_markdown(
         sections.append((line_idx, next_start, title, level))
 
     chunks: list[Chunk] = []
+    pending: list[tuple[int, int, str, int, str]] = []  # small sections waiting to be merged
+
+    def flush() -> None:
+        if not pending:
+            return
+        start, _, heading, level, _ = pending[0]
+        end = pending[-1][1]
+        content = "\n\n".join(text for _, _, _, _, text in pending)
+        chunks.append(
+            Chunk(
+                content=content, source=source, heading=heading, heading_level=level, start_line=start + 1, end_line=end
+            )
+        )
+        pending.clear()
+
     for start, end, heading, level in sections:
         section_text = "\n".join(lines[start:end]).strip()
         if not section_text or not _has_meaningful_content(section_text):
             continue
 
-        if len(section_text) <= max_chunk_size:
-            chunks.append(
-                Chunk(
-                    content=section_text,
-                    source=source,
-                    heading=heading,
-                    heading_level=level,
-                    start_line=start + 1,
-                    end_line=end,
-                )
-            )
-        else:
+        if len(section_text) > max_chunk_size:
+            flush()
             # Split large sections at paragraph boundaries
             chunks.extend(
                 _split_large_section(
@@ -132,7 +141,15 @@ def chunk_markdown(
                     overlap=overlap_lines,
                 )
             )
+            continue
 
+        if pending and sum(len(t) + 2 for *_, t in pending) + len(section_text) > max_chunk_size:
+            flush()
+        pending.append((start, end, heading, level, section_text))
+        if sum(len(t) for *_, t in pending) + 2 * (len(pending) - 1) >= min_chunk_size:
+            flush()
+
+    flush()
     return chunks
 
 

@@ -209,6 +209,7 @@ batch_size = 0        # 0 means the provider's own default
 [chunking]
 max_chunk_size = 1500 # characters; larger sections are split at paragraph boundaries
 overlap_lines = 2     # lines of context carried into a split chunk
+min_chunk_size = 0    # > 0 merges consecutive small sections (one turn each) up to this size; re-index with --force after changing
 
 [claude]
 summarize_enabled = true    # false disables turn capture for Claude Code

@@ -112,7 +112,8 @@ def index(paths: tuple[str, ...], force: bool, skip_if_locked: bool) -> None:
                             dimension=embedder.dimension, allow_rebuild=True) as store:  # fmt: skip
                 result = asyncio.run(index_paths(store, embedder, targets, force=force,
                                                  max_chunk_size=cfg.chunking.max_chunk_size,
-                                                 overlap_lines=cfg.chunking.overlap_lines))  # fmt: skip
+                                                 overlap_lines=cfg.chunking.overlap_lines,
+                                                 min_chunk_size=cfg.chunking.min_chunk_size))  # fmt: skip
         except (StoreError, ImportError, ValueError) as exc:
             _fail(f"Error: {exc}")
     failed = result.failed_files

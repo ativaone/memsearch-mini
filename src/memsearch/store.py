@@ -464,7 +464,7 @@ class Store:
 
 
 async def index_paths(store: Store, embedder: Any, paths: Sequence[str | Path], *, force: bool = False,
-                      max_chunk_size: int = 1500, overlap_lines: int = 2) -> IndexResult:  # fmt: skip
+                      max_chunk_size: int = 1500, overlap_lines: int = 2, min_chunk_size: int = 0) -> IndexResult:  # fmt: skip
     """Index every markdown file under *paths* into *store*.
 
     Incremental by ``chunk_id``: unchanged chunks are never re-embedded unless
@@ -488,8 +488,8 @@ async def index_paths(store: Store, embedder: Any, paths: Sequence[str | Path], 
             if scanned.size > max_bytes:
                 raise ValueError(f"file is {scanned.size / 1048576:.1f} MB, above the MEMSEARCH_MAX_FILE_MB "
                                  f"limit of {max_bytes / 1048576:g} MB")  # fmt: skip
-            indexed += await _index_file(store, embedder, source, force=force,
-                                         max_chunk_size=max_chunk_size, overlap_lines=overlap_lines)  # fmt: skip
+            indexed += await _index_file(store, embedder, source, force=force, max_chunk_size=max_chunk_size,
+                                         overlap_lines=overlap_lines, min_chunk_size=min_chunk_size)  # fmt: skip
         except Exception as exc:  # one bad file must never stop the run
             failures.append((source, f"{type(exc).__name__}: {exc}"[:2000]))
     roots = [root for root in (Path(p).expanduser().resolve() for p in paths) if root.is_dir()]
@@ -500,12 +500,13 @@ async def index_paths(store: Store, embedder: Any, paths: Sequence[str | Path], 
 
 
 async def _index_file(store: Store, embedder: Any, source: str, *, force: bool,
-                      max_chunk_size: int, overlap_lines: int) -> int:  # fmt: skip
+                      max_chunk_size: int, overlap_lines: int, min_chunk_size: int = 0) -> int:  # fmt: skip
     from .chunker import chunk_markdown, clean_content_for_embedding, compute_chunk_id
     from .scanner import read_utf8_text_replace
 
     text = read_utf8_text_replace(source)
-    chunks = chunk_markdown(text, source=source, max_chunk_size=max_chunk_size, overlap_lines=overlap_lines)
+    chunks = chunk_markdown(text, source=source, max_chunk_size=max_chunk_size, overlap_lines=overlap_lines,
+                            min_chunk_size=min_chunk_size)  # fmt: skip
     pairs = [(c, compute_chunk_id(c.source, c.start_line, c.end_line, c.content_hash)) for c in chunks]
     existing = store.ids_for_source(source)
     current = {chunk_id for _, chunk_id in pairs}

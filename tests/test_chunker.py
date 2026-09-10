@@ -251,3 +251,54 @@ def test_long_cjk_text_splits_on_fullwidth_semicolon() -> None:
     assert len(chunks) > 1
     assert all(len(chunk.content) <= 24 for chunk in chunks)
     assert all(chunk.content.endswith(semicolon) for chunk in chunks[:-1])
+
+
+# --- min_chunk_size (upstream #609) ------------------------------------------
+
+_JOURNAL = """\
+## Session 10:00
+
+### 10:00
+- User asked about retries
+- Claude Code read retry.py
+
+### 10:05
+- User asked about the circuit breaker
+- Claude Code found the budget is per host
+
+### 10:20
+- User asked for a summary
+- Claude Code wrote docs/retry.md
+"""
+
+
+def test_min_chunk_size_default_keeps_one_chunk_per_section():
+    chunks = chunk_markdown(_JOURNAL, source="j.md")
+    assert [c.heading for c in chunks] == ["10:00", "10:05", "10:20"]  # "## Session" has no body: dropped
+    assert chunk_markdown(_JOURNAL, source="j.md", min_chunk_size=0) == chunks
+
+
+def test_min_chunk_size_merges_small_sections_keeping_the_first_heading_and_span():
+    chunks = chunk_markdown(_JOURNAL, source="j.md", min_chunk_size=400)
+    assert len(chunks) == 1
+    merged = chunks[0]
+    assert (merged.heading, merged.heading_level) == ("10:00", 3)
+    assert (merged.start_line, merged.end_line) == (3, 14)
+    assert merged.content.count("### ") == 3
+    assert "- Claude Code wrote docs/retry.md" in merged.content
+
+
+def test_min_chunk_size_never_crosses_max_chunk_size():
+    chunks = chunk_markdown(_JOURNAL, source="j.md", min_chunk_size=400, max_chunk_size=150)
+    assert len(chunks) == 3  # each turn is ~70 chars; two together would exceed 150
+    assert all(len(c.content) <= 150 for c in chunks)
+
+
+def test_min_chunk_size_flushes_the_group_before_an_oversized_section():
+    big = "### 11:00\n" + "\n".join(f"- line {i} with enough text to matter" for i in range(40))
+    text = _JOURNAL + "\n" + big + "\n\n### 12:00\n- last small one\n"
+    chunks = chunk_markdown(text, source="j.md", min_chunk_size=400, max_chunk_size=300)
+    headings = [c.heading for c in chunks]
+    assert headings[0] == "10:00" and headings[-1] == "12:00"
+    assert all(len(c.content) <= 300 for c in chunks)
+    assert chunks[0].end_line < chunks[1].start_line  # the small group closed before the big section
