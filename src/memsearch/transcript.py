@@ -15,6 +15,7 @@ the file directly.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -93,6 +94,25 @@ def _as_text(content: Any) -> str:
 
 # -- per-format parsers ----------------------------------------------------------
 
+# Blocks the Claude Code harness injects into user entries (reminders, slash-command wrappers,
+# background-task notices). They are not the user's words: dropping them keeps the render budget
+# for the conversation. An explicit allowlist, never a generic <tag> rule — users write tags too.
+HARNESS_TAGS = (
+    "system-reminder",
+    "command-name",
+    "command-message",
+    "command-args",
+    "local-command-stdout",
+    "local-command-caveat",
+    "task-notification",
+)
+_HARNESS_RE = re.compile(rf"<({'|'.join(HARNESS_TAGS)})>.*?</\1>[ \t]*\n?", re.DOTALL)
+
+
+def strip_harness_tags(text: str) -> str:
+    """User text without harness-injected blocks (see :data:`HARNESS_TAGS`)."""
+    return _HARNESS_RE.sub("", text).strip()
+
 
 def _parse_claude(entries: list[dict[str, Any]]) -> list[Turn]:
     turns: list[Turn] = []
@@ -112,7 +132,7 @@ def _parse_claude(entries: list[dict[str, Any]]) -> list[Turn]:
                         if tc is not None:
                             tc.output = _clip(_as_text(b.get("content", "")))
                 continue
-            text = _as_text(content).strip()
+            text = strip_harness_tags(_as_text(content))
             if text:
                 turns.append(Turn(role="user", uuid=entry.get("uuid", ""), text=text))
         elif etype == "assistant":

@@ -547,6 +547,18 @@ def test_claude_stop_records_the_failure_instead_of_the_transcript(project, spaw
     assert "Summarize this session" not in text  # never persist raw transcript text
 
 
+def test_claude_stop_never_journals_a_rate_limit_notice(project, spawns, tmp_path):
+    """Upstream #527: prose with exit 0 (rate limit, refusal) is a failure, not a summary."""
+    _fake_bin(tmp_path, "claude", 'echo "You\'ve hit your limit. Resets at 11am."\n')
+    transcript = _claude_transcript(tmp_path / "session-a.jsonl")
+
+    _invoke(["stop", "--platform", "claude"], {"transcript_path": str(transcript)})
+
+    text = next(iter(_memory(project).glob("*.md"))).read_text(encoding="utf-8")
+    assert "- Memory summary unavailable: summarizer returned no bullet points;" in text
+    assert "hit your limit" not in text
+
+
 # --- stop: Codex two-phase ---------------------------------------------------
 
 

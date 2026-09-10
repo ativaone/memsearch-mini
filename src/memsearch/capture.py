@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+
+from .transcript import strip_harness_tags
 
 # What the upstream parsers print instead of a transcript. Never summarized.
 SENTINELS = frozenset({"(empty transcript)", "(empty rollout)", "(no user message found)", "(empty turn)"})
@@ -24,6 +27,7 @@ AGENT_NAMES = {"claude": "Claude Code", "codex": "Codex"}
 _HEADER = "=== Transcript of a conversation between User and {} ==="
 _FINAL_HEADER = "=== Final exchange, authoritative for outcome ==="
 _EXTRA_HEADER = "=== Additional conversation context ==="
+_BULLET_LINE = re.compile(r"^\s*[-*\u2022]\s", re.MULTILINE)
 FALLBACK_PROMPT = (
     "You are a third-person note-taker. Summarize the transcript as 2-10 bullet points. "
     "Write in third person. Mandatory language rule: write every bullet in the same primary "
@@ -82,12 +86,13 @@ def _claude_texts(obj: dict, *, plain: bool) -> list[str]:
     """Non-empty text of a Claude entry; tool_use/tool_result/thinking are skipped."""
     message = obj.get("message")
     content = message.get("content") if isinstance(message, dict) else None
+    clean = strip_harness_tags if plain else str.strip  # user entries carry harness-injected blocks
     if isinstance(content, str):
-        return [content.strip()] if plain and content.strip() else []
+        return [clean(content)] if plain and clean(content) else []
     if not isinstance(content, list):
         return []
     blocks = [b.get("text") or "" for b in content if isinstance(b, dict) and b.get("type") == "text"]
-    return [text for text in (block.strip() for block in blocks) if text]
+    return [text for text in (clean(block) for block in blocks) if text]
 
 
 def _claude_turn(lines: list[str], session_id: str, path: Path | None) -> ParsedTurn:
@@ -278,7 +283,13 @@ def summarize(
     if proc.returncode != 0:
         return "", f"summarizer exited with status {proc.returncode}"
     summary = proc.stdout.decode("utf-8", errors="replace").strip()
-    return (summary, "") if summary else ("", "summarizer returned empty output")
+    if not summary:
+        return "", "summarizer returned empty output"
+    # The prompt contracts bullet points only. A rate-limit notice or a refusal can come back
+    # with exit 0 as plain prose; that must never be written down as the turn's summary.
+    if not _BULLET_LINE.search(summary):
+        return "", "summarizer returned no bullet points"
+    return summary, ""
 
 
 def mechanical_summary(user_question: str, last_message: str, content: str) -> str:

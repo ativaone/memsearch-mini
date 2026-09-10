@@ -152,3 +152,52 @@ def test_render_is_capped(tmp_path: Path) -> None:
     out = tr.format_turns(tr.parse_transcript(_write(tmp_path / "big.jsonl", rows)))
     assert len(out) <= tr.MAX_RENDER_CHARS + 80
     assert "truncated" in out
+
+
+# --- harness-injected blocks (upstream #227) ---------------------------------
+
+
+def _user(text: str, uuid: str = "u") -> dict:
+    return {"type": "user", "uuid": uuid, "message": {"content": text}}
+
+
+def test_slash_command_wrapper_alone_yields_no_user_turn(tmp_path: Path) -> None:
+    wrapper = (
+        "<command-name>/effort</command-name>\n<command-message>effort</command-message>\n"
+        "<command-args></command-args>\n<local-command-stdout>Cancelled</local-command-stdout>"
+    )
+    p = _write(tmp_path / "c.jsonl", [_user(wrapper), _user("real question", "u2")])
+    turns = tr.parse_transcript(p)
+    assert [(t.uuid, t.text) for t in turns] == [("u2", "real question")]
+
+
+def test_system_reminder_is_stripped_from_user_text(tmp_path: Path) -> None:
+    p = _write(tmp_path / "c.jsonl", [_user("<system-reminder>ignore me</system-reminder>\nreal question")])
+    assert tr.parse_transcript(p)[0].text == "real question"
+
+
+def test_large_command_stdout_does_not_eat_the_render_budget(tmp_path: Path) -> None:
+    noise = "<local-command-stdout>" + "x" * 5000 + "</local-command-stdout>"
+    p = _write(tmp_path / "c.jsonl", [_user(noise + "\nthe one sentence that matters")])
+    rendered = tr.format_turns(tr.parse_transcript(p))
+    assert "the one sentence that matters" in rendered
+    assert "xxxx" not in rendered
+    assert len(rendered) < 200
+
+
+def test_user_authored_tags_are_kept(tmp_path: Path) -> None:
+    p = _write(tmp_path / "c.jsonl", [_user("<demanda>keep this</demanda> please")])
+    assert tr.parse_transcript(p)[0].text == "<demanda>keep this</demanda> please"
+
+
+def test_assistant_text_is_never_stripped(tmp_path: Path) -> None:
+    rows = [
+        _user("q"),
+        {
+            "type": "assistant",
+            "uuid": "a",
+            "message": {"content": [{"type": "text", "text": "see <system-reminder>quoted</system-reminder>"}]},
+        },
+    ]
+    p = _write(tmp_path / "c.jsonl", rows)
+    assert tr.parse_transcript(p)[1].text == "see <system-reminder>quoted</system-reminder>"

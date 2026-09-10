@@ -134,6 +134,21 @@ def test_claude_extracts_only_the_last_turn(tmp_path):
         assert noise not in turn.text
 
 
+def test_claude_summarizer_input_excludes_harness_blocks(tmp_path):
+    """Upstream #227: reminders and task notices are not the user's words."""
+    rows = [
+        {
+            "type": "user",
+            "uuid": "u1",
+            "message": {"content": "<system-reminder>English reminder</system-reminder>\nqual o status?"},
+        },
+        {"type": "assistant", "uuid": "a1", "message": {"content": [{"type": "text", "text": "Tudo verde."}]}},
+    ]
+    turn = capture.extract_last_turn(_jsonl(tmp_path / "s.jsonl", rows), "claude")
+    assert "[User]: qual o status?" in turn.text
+    assert "English reminder" not in turn.text and "system-reminder" not in turn.text
+
+
 def test_claude_explicit_session_id_wins(tmp_path):
     turn = capture.extract_last_turn(_claude_transcript(tmp_path / "session-a.jsonl"), "claude", session_id="from-host")
 
@@ -365,6 +380,24 @@ def test_summarize_reports_empty_output(tmp_path, monkeypatch):
     _fake_bin(tmp_path, monkeypatch, "claude", "printf '   \\n'\n")
 
     assert capture.summarize("A", platform="claude", model="m", prompt="P") == ("", "summarizer returned empty output")
+
+
+def test_summarize_rejects_prose_without_bullets(tmp_path, monkeypatch):
+    """Upstream #527: a rate-limit notice with exit 0 must not become the turn's summary."""
+    _fake_bin(
+        tmp_path, monkeypatch, "claude", 'echo "You\'ve hit your limit \xc2\xb7 resets 11am (Africa/Johannesburg)"\n'
+    )
+
+    assert capture.summarize("A", platform="claude", model="m", prompt="P") == (
+        "",
+        "summarizer returned no bullet points",
+    )
+
+
+def test_summarize_accepts_any_bullet_marker(tmp_path, monkeypatch):
+    _fake_bin(tmp_path, monkeypatch, "claude", "printf 'Notes:\\n* User asked X\\n'\n")
+
+    assert capture.summarize("A", platform="claude", model="m", prompt="P") == ("Notes:\n* User asked X", "")
 
 
 def test_summarize_reports_a_timeout(tmp_path, monkeypatch):
