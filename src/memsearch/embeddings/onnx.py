@@ -1,6 +1,6 @@
 """ONNX embedding via onnxruntime (runs on CPU, no GPU required).
 
-Requires: ``pip install 'memsearch[onnx]'`` or ``uv add 'memsearch[onnx]'``
+Requires the ``onnx`` extra (``uv sync --extra onnx`` in the plugin directory).
 No API key needed. Used as the default provider by the Claude Code plugin for zero-config
 memory search. Default model is a pre-quantized int8 bge-m3 ONNX export.
 """
@@ -9,6 +9,21 @@ from __future__ import annotations
 
 import asyncio
 from functools import partial
+
+_CPU = "CPUExecutionProvider"
+_ACCELERATORS = ("CUDAExecutionProvider",)
+
+
+def _select_providers(available) -> list[str]:
+    """Execution providers for the session: a known accelerator when present, then always CPU.
+
+    Chosen explicitly instead of trusting onnxruntime's default order, which on a non-CPU build
+    can pick a remote provider (Azure) or one measured far slower than CPU for this int8 export
+    (CoreML). Anything not listed here is never selected automatically.
+    """
+    chosen = [p for p in _ACCELERATORS if p in available]
+    chosen.append(_CPU)
+    return chosen
 
 
 class OnnxEmbedding:
@@ -50,7 +65,13 @@ class OnnxEmbedding:
         self._tokenizer.enable_padding(pad_id=1, pad_token="<pad>")
         self._tokenizer.enable_truncation(max_length=8192)
 
-        self._session = ort.InferenceSession(model_path)
+        providers = _select_providers(ort.get_available_providers())
+        try:
+            self._session = ort.InferenceSession(model_path, providers=providers)
+        except Exception:
+            if providers == [_CPU]:
+                raise
+            self._session = ort.InferenceSession(model_path, providers=[_CPU])  # accelerator failed to load
         self._output_names = [o.name for o in self._session.get_outputs()]
         self._has_dense_vecs = "dense_vecs" in self._output_names
         # BERT-family exports (e.g. Xenova/all-MiniLM-L6-v2) declare a

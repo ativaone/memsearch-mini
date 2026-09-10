@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from memsearch.embeddings.onnx import OnnxEmbedding
+from memsearch.embeddings.onnx import OnnxEmbedding, _select_providers
 
 
 class _StubEncoding:
@@ -66,3 +66,16 @@ def test_default_batch_size_is_64_and_config_overrides() -> None:
     e = object.__new__(OnnxEmbedding)
     e._batch_size = 8  # what __init__ stores when embedding.batch_size = 8
     assert e.batch_size == 8
+
+
+def test_provider_selection_prefers_cuda_and_always_ends_with_cpu() -> None:
+    assert _select_providers(["CPUExecutionProvider"]) == ["CPUExecutionProvider"]
+    assert _select_providers(["CUDAExecutionProvider", "CPUExecutionProvider"]) == [
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+    # Remote or known-slow providers are never picked by themselves.
+    assert _select_providers(["AzureExecutionProvider", "CoreMLExecutionProvider", "CPUExecutionProvider"]) == [
+        "CPUExecutionProvider"
+    ]
+    assert _select_providers([]) == ["CPUExecutionProvider"]
