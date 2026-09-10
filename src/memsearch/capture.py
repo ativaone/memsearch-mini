@@ -96,23 +96,41 @@ def _claude_texts(obj: dict, *, plain: bool) -> list[str]:
     return [text for text in (clean(block) for block in blocks) if text]
 
 
-def _claude_turn(lines: list[str], session_id: str, path: Path | None) -> ParsedTurn:
+def _is_user_turn(obj: dict | None) -> bool:
+    return bool(obj and obj.get("type") == "user" and not obj.get("isMeta") and _claude_texts(obj, plain=True))
+
+
+def _claude_turn(lines: list[str], session_id: str, path: Path | None, turn_uuid: str = "") -> ParsedTurn:
+    """The last turn, or — when ``turn_uuid`` is given — the turn that user entry starts.
+
+    A recovered turn may no longer be the last one (the session was resumed), so it is cut at
+    the next user message instead of at the end of the file.
+    """
     turn = ParsedTurn(session_id=session_id, transcript_path=str(path) if path is not None else "")
     if not lines:
         turn.text = "(empty transcript)"
         return turn
-    start = None
-    for index in range(len(lines) - 1, -1, -1):
-        obj = _loads(lines[index])
-        if obj and obj.get("type") == "user" and not obj.get("isMeta") and _claude_texts(obj, plain=True):
-            start = index
-            break
+    start = end = None
+    if turn_uuid:
+        for index, raw in enumerate(lines):
+            obj = _loads(raw)
+            if start is None:
+                if _is_user_turn(obj) and str(obj.get("uuid") or "") == turn_uuid:
+                    start = index
+            elif _is_user_turn(obj):
+                end = index
+                break
+    else:
+        for index in range(len(lines) - 1, -1, -1):
+            if _is_user_turn(_loads(lines[index])):
+                start = index
+                break
     if start is None:
         turn.text = "(no user message found)"
         return turn
     turn.turn_uuid = str((_loads(lines[start]) or {}).get("uuid") or "")
     out = [_HEADER.format("Claude Code")]
-    for raw in lines[start:]:
+    for raw in lines[start:end]:
         obj = _loads(raw)
         if obj is None or obj.get("type") not in ("user", "assistant"):
             continue
@@ -214,15 +232,20 @@ def extract_last_turn(
     *,
     session_id: str = "",
     last_assistant_message: str = "",
+    turn_uuid: str = "",
 ) -> ParsedTurn:
-    """Parse the last turn of a Claude Code transcript or of a Codex rollout."""
+    """Parse the last turn of a Claude Code transcript or of a Codex rollout.
+
+    ``turn_uuid`` (Claude only) selects one specific turn instead of the last: the recovery
+    path uses it for a turn whose Stop hook died before the journal was written.
+    """
     path = Path(transcript_path) if transcript_path else None
     stem = path.stem if path is not None else ""
     if platform == "codex":
         default_id = stem[len("rollout-") :] if stem.startswith("rollout-") else stem
         last_message = _truncate(last_assistant_message, LAST_MESSAGE_CHARS, "...(truncated)")
         return _codex_turn(path, session_id or default_id, last_message)
-    return _claude_turn(_read_lines(path), session_id or stem, path)
+    return _claude_turn(_read_lines(path), session_id or stem, path, turn_uuid)
 
 
 _SAFE_MODE: bool | None = None

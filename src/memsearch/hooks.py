@@ -164,6 +164,120 @@ def _run_index(memory: str | os.PathLike[str], cwd: str | os.PathLike[str]) -> N
         traceback.print_exc(file=sys.stderr)
 
 
+# --- pending turns: recovery of a Stop hook that died mid-summary -------------
+#
+# The Claude Stop hook is async and can take up to 110 s (``claude -p``). Quit the host in
+# that window — or run it under a wrapper that kills the whole process tree on exit — and the
+# turn is lost without a trace. So the hook records *where* the turn is (transcript path,
+# turn uuid, timestamp; never its content) in ``<project>/.memsearch/pending/`` before it
+# starts summarizing, and deletes the record once the journal is written. A record still
+# there after the hook's 120 s timeout belongs to a dead hook: the next SessionStart or Stop
+# in that project hands it to a detached ``hook recover``, which re-reads the turn from the
+# transcript and writes it into the journal of the day it happened.
+
+PENDING_GRACE_SECONDS = 150  # a Stop hook cannot outlive its 120 s timeout
+PENDING_WORKING_STALE_SECONDS = 1800  # a recover worker that died mid-turn
+_UNSAFE_NAME = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def pending_dir(project_dir: str | os.PathLike[str]) -> Path:
+    return memsearch_dir(project_dir) / "pending"
+
+
+def _pending_write(project_dir: Path, turn, now: datetime) -> Path | None:
+    """Record a turn about to be summarized; ``None`` when the record could not be written."""
+    if not turn.transcript_path or not turn.turn_uuid:
+        return None
+    directory = pending_dir(project_dir)
+    name = f"{_UNSAFE_NAME.sub('_', turn.session_id) or 'session'}-{_UNSAFE_NAME.sub('_', turn.turn_uuid)}.json"
+    record = {
+        "platform": "claude",
+        "now": now.isoformat(),
+        "session_id": turn.session_id,
+        "turn_uuid": turn.turn_uuid,
+        "transcript_path": turn.transcript_path,
+    }
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / name
+        path.write_text(json.dumps(record), encoding="utf-8")
+        return path
+    except OSError:
+        traceback.print_exc(file=sys.stderr)
+        return None
+
+
+def _pending_discard(path: Path | None) -> None:
+    if path is not None:
+        with contextlib.suppress(OSError):
+            path.unlink()
+
+
+def _stale_pending(directory: Path, now: float | None = None) -> list[Path]:
+    """Records whose hook is certainly dead, plus claims left behind by a dead worker."""
+    clock = time.time() if now is None else now
+    stale: list[Path] = []
+    try:
+        entries = sorted(directory.iterdir())
+    except OSError:
+        return stale
+    for path in entries:
+        if path.name.endswith(".json"):
+            limit = PENDING_GRACE_SECONDS
+        elif path.name.endswith(".working"):
+            limit = PENDING_WORKING_STALE_SECONDS
+        else:
+            continue
+        try:
+            if clock - path.stat().st_mtime >= limit:
+                stale.append(path)
+        except OSError:
+            continue
+    return stale
+
+
+def _sweep_pending(project_dir: Path) -> str:
+    """Spawn one detached recovery worker when a dead hook left turns behind.
+
+    Returns a status fragment for the host: what is being recovered now, or what is still
+    too young to touch (its hook may be running; the next turn end will pick it up).
+    """
+    directory = pending_dir(project_dir)
+    stale = _stale_pending(directory)
+    if stale:
+        _spawn_detached(
+            [sys.executable, "-m", "memsearch", "hook", "recover", str(project_dir)],
+            project_dir,
+            {**os.environ, "MEMSEARCH_IN_STOP_WORKER": "1"},
+        )
+        return f"recovering {len(stale)} earlier turn(s) in the background"
+    try:
+        young = sum(1 for path in directory.iterdir() if path.name.endswith((".json", ".working")))
+    except OSError:
+        young = 0
+    return f"{young} turn(s) pending, recovery at the next turn end" if young else ""
+
+
+def _pending_claim(path: Path) -> Path | None:
+    """Rename the record to ``<name>.<pid>.working``; atomic, so two workers never share one."""
+    base = path.name.split(".json", 1)[0] + ".json"
+    target = path.with_name(f"{base}.{os.getpid()}.working")
+    try:
+        path.rename(target)
+    except OSError:
+        return None
+    return target
+
+
+def _already_journaled(memory: Path, turn_uuid: str, stamp: datetime, suffix: str) -> bool:
+    """The append may have landed before the worker died: never write a turn twice."""
+    journal = memory / f"{stamp:%Y-%m-%d}{suffix}.md"
+    try:
+        return f"turn:{turn_uuid}" in journal.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
 def _index_state(db_path: Path, memory: Path) -> tuple[str, bool]:
     """(status fragment, reindex needed), read from the derived index with sqlite3."""
     count: int | None = None
@@ -355,6 +469,9 @@ def session_start(platform: str) -> None:
     status += f" | index: {index_status} | memory: {memory}"
     if stale:
         _spawn_detached(_index_argv(memory), project_dir, _reindex_env())
+    pending = _sweep_pending(project_dir)
+    if pending:
+        status += f" | {pending}"
     result = {"systemMessage": status}
     context = recent_memory(memory)
     if context:
@@ -362,7 +479,8 @@ def session_start(platform: str) -> None:
     _emit(result)
 
 
-def _summarize_and_append(cfg, platform: str, turn, memory: Path, project_dir: Path, now=None) -> None:
+def _summarize_and_append(cfg, platform: str, turn, memory: Path, project_dir: Path, now=None) -> str:
+    """Journal the turn; returns the summarizer's failure reason, or "" when it produced bullets."""
     summary, reason = capture.summarize(
         turn.text,
         platform=platform,
@@ -384,6 +502,7 @@ def _summarize_and_append(cfg, platform: str, turn, memory: Path, project_dir: P
         now=now,
         suffix=capture.journal_suffix(cfg),
     )
+    return reason
 
 
 @hook.command("stop")
@@ -426,9 +545,17 @@ def stop(platform: str) -> None:
     if platform == "codex":
         _codex_handoff(turn, memory, project_dir)
         return
-    _summarize_and_append(cfg, platform, turn, memory, project_dir)
+    now = datetime.now()
+    pending = _pending_write(project_dir, turn, now)
+    reason = _summarize_and_append(cfg, platform, turn, memory, project_dir, now=now)
+    _pending_discard(pending)
     _spawn_detached(_index_argv(memory), project_dir, _reindex_env())
-    _emit({})
+    # The host shows systemMessage once this async hook completes: a quiet "safe to quit now".
+    message = "[memsearch] turn captured" if not reason else f"[memsearch] turn recorded without a summary ({reason})"
+    recovery = _sweep_pending(project_dir)
+    if recovery:
+        message += f" | {recovery}"
+    _emit({"systemMessage": message})
 
 
 def _codex_handoff(turn, memory: Path, project_dir: Path) -> None:
@@ -488,3 +615,42 @@ def stop_worker(workfile: str) -> None:
     _summarize_and_append(config.load(), "codex", turn, memory, project_dir, now=now)
     _run_index(memory, project_dir)
     _emit({})
+
+
+@hook.command("recover", hidden=True)
+@click.argument("project_dir")
+@_safe
+def recover(project_dir: str) -> None:
+    """Detached: journal the turns whose Stop hook died mid-summary. Not called by hosts."""
+    project = Path(project_dir)
+    memory = memory_dir(project)
+    cfg = config.load()
+    suffix = capture.journal_suffix(cfg)
+    recovered = 0
+    for record in _stale_pending(pending_dir(project)):
+        claimed = _pending_claim(record)
+        if claimed is None:
+            continue  # another worker got there first
+        try:
+            work = _as_dict(claimed.read_text(encoding="utf-8", errors="replace")) or {}
+            turn_uuid = str(work.get("turn_uuid") or "")
+            try:
+                stamp = datetime.fromisoformat(str(work.get("now") or ""))
+            except ValueError:
+                stamp = datetime.now()
+            turn = capture.extract_last_turn(
+                str(work.get("transcript_path") or ""),
+                "claude",
+                session_id=str(work.get("session_id") or ""),
+                turn_uuid=turn_uuid,
+            )
+            if turn.usable and turn.turn_uuid == turn_uuid and not _already_journaled(memory, turn_uuid, stamp, suffix):
+                _summarize_and_append(cfg, "claude", turn, memory, project, now=stamp)
+                recovered += 1
+        except Exception:
+            traceback.print_exc(file=sys.stderr)
+        finally:
+            _pending_discard(claimed)
+    if recovered:
+        _run_index(memory, project)
+    _emit({"systemMessage": f"[memsearch] recovered {recovered} turn(s)"})  # lands in index.log

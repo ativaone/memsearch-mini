@@ -88,6 +88,9 @@ For local development, point Claude Code at a working tree instead of the market
 claude --plugin-dir /path/to/memsearch-mini
 ```
 
+*Running Claude Code under a sandbox (the `sandbox` block of `settings.json`, a bubblewrap wrapper)?
+See [Sandbox](#sandbox) before the first session.*
+
 ## Install — Codex
 
 ```bash
@@ -109,7 +112,7 @@ writing, and leaves unrelated hooks alone.
 Codex sandboxing: the first index needs network access to download the embedding model. Upstream's
 README recommended running that first session with full access
 (`codex --dangerously-bypass-approvals-and-sandbox`); after the model is cached, a read-only sandbox
-is enough.
+is enough. An outer wrapper around the host (bubblewrap) has its own rules: see [Sandbox](#sandbox).
 
 To undo all of this, see [Uninstall](#uninstall).
 
@@ -138,6 +141,7 @@ Per project:
 | `<project>/.memsearch/memory/YYYY-MM-DD.md` | Daily journal — **the source of truth**. Plain markdown, editable, versionable. |
 | `<project>/.memsearch/index.db` | Derived SQLite index: chunk rows, float32 embeddings, an FTS5 table. Rebuildable. |
 | `<project>/.memsearch/index.lock` | Held by a running indexer; `index --skip-if-locked` gives up instead of queueing. |
+| `<project>/.memsearch/pending/` | One small JSON per turn whose summary is in flight (transcript path, turn uuid, time — never content). Empty whenever every turn has been written; see [Hooks](#hooks). |
 
 Under `$MEMSEARCH_HOME`:
 
@@ -177,11 +181,20 @@ at the raw transcript.
 |---|---|---|
 | `SessionStart` | 10 s | Prints `[memsearch v<version>] embedding: <provider>/<model> \| index: N chunks, updated … \| memory: <dir>`, injects a `# Recent Memory` block (two newest journals, at most 40 lines and 1800 bytes) as `additionalContext`, and spawns a detached reindex when the index is absent or stale. |
 | `UserPromptSubmit` | 5 s | Pure bash, never starts Python: prints the hint `[memsearch] Recall available if needed`. |
-| `Stop` | 120 s async (Claude), 30 s (Codex) | Summarizes the last turn, appends it to today's journal, then spawns a detached `index --skip-if-locked`. |
+| `Stop` | 120 s async (Claude), 30 s (Codex) | Records the turn under `.memsearch/pending/`, summarizes it, appends it to today's journal, drops the record, then spawns a detached `index --skip-if-locked`. On Claude it ends with a `systemMessage` — `[memsearch] turn captured`, or `turn recorded without a summary (<reason>)` — which the host shows when the async hook completes: the quiet sign that it is safe to quit. |
 
 There is no SessionEnd hook — nothing needs stopping. On Codex the Stop hook is two-phase: it parses
 the rollout synchronously (Codex may delete it on return), writes a work file, prints `{}`, and lets
 a detached `hook stop-worker` do the summarizing and indexing.
+
+A Claude Stop hook that dies mid-summary — the host quit, a sandbox wrapper killed the process tree —
+leaves its record behind. A record older than 150 s (a hook cannot outlive its 120 s timeout) is
+handed by the next `SessionStart` or `Stop` in that project to a detached `hook recover`, which
+re-reads that exact turn from the transcript (by uuid, so a resumed session does not confuse it),
+writes it into the journal of the day it happened, skips it if it is already there, and reindexes.
+The hook that spawned the worker says so in its status (`recovering N earlier turn(s) in the
+background`); a record too young to touch is reported as `N turn(s) pending, recovery at the next
+turn end`. Codex keeps its own two-phase scheme and does not use the pending directory.
 
 Every hook is a no-op when `MEMSEARCH_DISABLE=1`, which is exactly how the summarizer child avoids
 re-entering the hooks that spawned it.
@@ -310,6 +323,71 @@ Exit codes: `0` success, `1` runtime error, `2` usage error, `3` unrecognized tr
   failures and skipped; the rest of the run still succeeds. Raise the limit or split the file.
 - **Codex summaries look truncated** — the rollout text handed to the summarizer is capped at
   `MEMSEARCH_SUMMARY_MAX_CHARS` characters (default 8000).
+- **A turn is missing from a journal** — look in `<project>/.memsearch/pending/`. A record there means
+  its Stop hook died before writing; it is recovered at the next session start or turn end, once it
+  is 150 s old. A `.working` suffix means the recovery is running right now.
+
+## Sandbox
+
+Claude Code can run under two sandboxes at once: the harness's own `sandbox` block in `settings.json`
+(a write allowlist and a network filter that apply **only to the Bash tool**) and an outer wrapper
+such as bubblewrap that mounts everything read-only except a few paths. The plugin works under both
+once each layer knows about `$MEMSEARCH_HOME`.
+
+### Which layer runs what
+
+| Code path | Runs | Writes | Network |
+|---|---|---|---|
+| Hooks and the children they detach (`uv sync`, the indexer, `claude -p`) | outside the Bash sandbox, inside the wrapper | `~/.memsearch`, `<project>/.memsearch`, `~/.claude` (the summarizer's own state) | `claude -p` reaches the API; the first index downloads the model from `huggingface.co` |
+| `memory-recall` skill (`bin/memsearch search` / `expand` / `transcript`) | through the Bash tool, so inside the Bash sandbox | `~/.memsearch/uv-cache` — `uv run` refuses to start when its cache is read-only, even with `--frozen --no-sync` | none once the model is cached |
+| The plugin checkout | — | nothing, ever | — |
+
+### settings.json
+
+```json
+"permissions": { "deny": ["Edit(~/.memsearch/**)"] },
+"sandbox": { "filesystem": { "allowWrite": ["~/.memsearch/"] } }
+```
+
+Write access, not just read — reading is allowed by default anyway. The `Edit` deny is optional
+defence in depth: nothing under `~/.memsearch` is meant to be hand-edited (`bin/memsearch config set`
+covers the config). No extra network domain is needed: the model download runs in a hook child,
+outside the Bash filter. Allow `huggingface.co` and `*.hf.co` only if you want to run
+`bin/memsearch --sync` or `index` from the Bash tool before the background indexer has cached the
+model.
+
+### An outer wrapper (bubblewrap and friends)
+
+Bind `~/.memsearch` writable and create it before the wrapper starts: a bind to a missing directory
+fails or is skipped, and `~` is read-only inside. `~/.claude` has to be writable for the harness
+itself, which already covers the plugin checkout under `~/.claude/plugins` (never written to) and
+the summarizer's transcripts.
+
+Wrappers usually add `--unshare-pid` and `--die-with-parent`. Together they mean **no process outlives
+the session**: when `claude` exits, the PID namespace is torn down and every detached child dies with
+it — exactly the children this plugin relies on. It is built to survive that:
+
+- **First install.** The detached `uv sync` (≈90 MB), the model download (a few hundred MB) and the
+  first index all run in the background of the first session. Quit before they finish and the sync
+  lock (`~/.memsearch/venvs/<hash>.lock`) is left behind: sessions in the next 30 minutes give up at
+  once and print `installing runtime in the background` again, then the lock goes stale and the next
+  session retries. The model download resumes from its `.incomplete` files. To skip the waiting, run
+  the sync in the foreground, outside the wrapper, then keep one session open until
+  `~/.memsearch/index.log` shows the model arrived:
+
+  ```bash
+  ~/.claude/plugins/marketplaces/ativaone/bin/memsearch --sync   # Claude Code marketplace install
+  /path/to/memsearch-mini/bin/memsearch --sync                   # --plugin-dir, or Codex
+  ```
+
+- **Indexer killed mid-run.** The next `SessionStart` sees journals newer than the index and
+  reindexes.
+- **Stop hook killed mid-summary.** The hook records the turn under `<project>/.memsearch/pending/`
+  before it starts `claude -p`; the next `SessionStart` or `Stop` in that project recovers it (see
+  [Hooks](#hooks)). The summary lands in the journal of the day the turn happened, so quitting right
+  after an answer costs nothing but the delay. Wait for `[memsearch] turn captured` if the last
+  turn matters; `pending/` is empty when every turn has been written, so a status line can watch it
+  if you want a permanent "still writing" marker.
 
 ## Uninstall
 
@@ -325,6 +403,7 @@ survived an uninstall.
 | `~/.memsearch/` | Runtime environment, uv cache, downloaded interpreter, embedding model, `config.toml` | `uninstall.sh --purge`, or `rm -rf ~/.memsearch` |
 | `<project>/.memsearch/memory/*.md` | Your journals — **kept**, they are the source of truth | You, by hand |
 | `<project>/.memsearch/index.db`, `index.lock` | Derived index; safe to delete any time | `rm -f <project>/.memsearch/index.db* <project>/.memsearch/index.lock` |
+| `<project>/.memsearch/pending/` | Records of turns still being summarized; empty in a healthy install | Itself, or `rm -rf` |
 | `~/.codex/hooks.json`, `~/.agents/skills/memory-recall` | Codex wiring | `uninstall.sh` |
 | `$TMPDIR/memsearch-stop.*.json` | Transient Codex work files, deleted by the worker that reads them | Itself |
 

@@ -632,3 +632,20 @@ def test_append_to_journal_honours_the_suffix(tmp_path):
         tmp_path, session_id="s", turn_uuid="u", transcript_path="/t", summary="- x", suffix="-host1"
     )
     assert path.name.endswith("-host1.md") and path.name[:10].count("-") == 2
+
+
+def test_claude_extracts_a_specific_turn_by_uuid(tmp_path):
+    """Recovery of a dead Stop hook: the turn may no longer be the last one."""
+    path = _claude_transcript(tmp_path / "session-a.jsonl")
+
+    turn = capture.extract_last_turn(path, "claude", turn_uuid="turn-1")
+
+    assert turn.text == (
+        "=== Transcript of a conversation between User and Claude Code ===\n"
+        "[User]: FIRST_TURN_QUESTION\n"
+        "[Claude Code]: FIRST_TURN_ANSWER"
+    )
+    assert turn.turn_uuid == "turn-1"
+    assert "LAST_TURN" not in turn.text
+    assert capture.extract_last_turn(path, "claude", turn_uuid="turn-2").turn_uuid == "turn-2"
+    assert not capture.extract_last_turn(path, "claude", turn_uuid="never-written").usable

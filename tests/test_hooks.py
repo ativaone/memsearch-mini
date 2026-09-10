@@ -564,7 +564,7 @@ def test_claude_stop_summarizes_and_appends(project, spawns, tmp_path):
 
     payload = _json(_invoke(["stop", "--platform", "claude"], {"transcript_path": str(transcript)}))
 
-    assert payload == {}
+    assert payload == {"systemMessage": "[memsearch] turn captured"}
     journals = list(_memory(project).glob("*.md"))
     text = journals[0].read_text(encoding="utf-8")
     assert text.startswith("\n## Session ")
@@ -577,8 +577,9 @@ def test_claude_stop_records_the_failure_instead_of_the_transcript(project, spaw
     _fake_bin(tmp_path, "claude", "exit 3\n")
     transcript = _claude_transcript(tmp_path / "session-a.jsonl")
 
-    _invoke(["stop", "--platform", "claude"], {"transcript_path": str(transcript)})
+    payload = _json(_invoke(["stop", "--platform", "claude"], {"transcript_path": str(transcript)}))
 
+    assert payload == {"systemMessage": "[memsearch] turn recorded without a summary (summarizer exited with status 3)"}
     text = next(iter(_memory(project).glob("*.md"))).read_text(encoding="utf-8")
     assert "- Memory summary unavailable: summarizer exited with status 3;" in text
     assert "Summarize this session" not in text  # never persist raw transcript text
@@ -665,3 +666,181 @@ def test_stop_worker_tolerates_a_missing_work_file(tmp_path, monkeypatch):
 
     assert _json(_invoke(["stop-worker", str(tmp_path / "gone.json")])) == {}
     assert indexed == []
+
+
+# --- stop: pending record and recovery ----------------------------------------
+
+
+def _pending(project: Path) -> Path:
+    return project / ".memsearch" / "pending"
+
+
+def _age(path: Path, seconds: float) -> None:
+    stamp = time.time() - seconds
+    os.utime(path, (stamp, stamp))
+
+
+def _pending_record(project: Path, transcript: Path, *, uuid: str = "turn-a", now: str = "2026-03-02T09:15:00",
+                    session: str = "session-a", age: float = 0.0) -> Path:  # fmt: skip
+    _pending(project).mkdir(parents=True, exist_ok=True)
+    path = _pending(project) / f"{session}-{uuid}.json"
+    record = {
+        "platform": "claude",
+        "now": now,
+        "session_id": session,
+        "turn_uuid": uuid,
+        "transcript_path": str(transcript),
+    }
+    path.write_text(json.dumps(record), encoding="utf-8")
+    _age(path, age)
+    return path
+
+
+def test_claude_stop_records_the_turn_before_summarizing_and_forgets_it_after(project, spawns, tmp_path, monkeypatch):
+    transcript = _claude_transcript(tmp_path / "session-a.jsonl", uuid="turn-a")
+    seen: list[dict] = []
+    real = hooks._summarize_and_append
+
+    def spy(cfg, platform, turn, memory, project_dir, now=None):
+        seen.extend(json.loads(p.read_text(encoding="utf-8")) for p in _pending(project).glob("*.json"))
+        real(cfg, platform, turn, memory, project_dir, now=now)
+
+    monkeypatch.setattr(hooks, "_summarize_and_append", spy)
+    _fake_bin(tmp_path, "claude", 'echo "- A summary."\n')
+
+    payload = _json(_invoke(["stop", "--platform", "claude"], {"transcript_path": str(transcript)}))
+
+    assert payload == {"systemMessage": "[memsearch] turn captured"}
+    assert [(r["session_id"], r["turn_uuid"], r["transcript_path"]) for r in seen] == [
+        ("session-a", "turn-a", str(transcript))
+    ]
+    assert "content" not in seen[0] and "Summarize this session" not in json.dumps(seen[0])
+    assert list(_pending(project).iterdir()) == []  # written, then discarded
+    assert [call[0] for call in spawns] == [hooks._index_argv(_memory(project))]
+
+
+def test_claude_stop_leaves_the_record_when_it_dies_mid_summary(project, spawns, tmp_path, monkeypatch):
+    transcript = _claude_transcript(tmp_path / "session-a.jsonl", uuid="turn-a")
+
+    def killed(*args, **kwargs):
+        raise RuntimeError("SIGKILL stand-in")
+
+    monkeypatch.setattr(hooks, "_summarize_and_append", killed)
+
+    assert _json(_invoke(["stop", "--platform", "claude"], {"transcript_path": str(transcript)})) == {}
+
+    assert [p.name for p in _pending(project).iterdir()] == ["session-a-turn-a.json"]
+    assert list(_memory(project).glob("*.md")) == []
+
+
+def test_fresh_records_are_left_to_their_running_hook(project, spawns, tmp_path):
+    _make_index(project, last_index_at=time.time() + 600)  # nothing else to spawn
+    transcript = _claude_transcript(tmp_path / "session-a.jsonl")
+    _pending_record(project, transcript, age=hooks.PENDING_GRACE_SECONDS - 30)
+
+    payload = _json(_invoke(["session-start", "--platform", "claude"], {}))
+
+    assert spawns == []
+    assert payload["systemMessage"].endswith(" | 1 turn(s) pending, recovery at the next turn end")
+
+
+def test_session_start_and_stop_hand_stale_records_to_a_detached_worker(project, spawns, tmp_path):
+    _make_index(project, last_index_at=time.time() + 600)  # nothing else to spawn
+    transcript = _claude_transcript(tmp_path / "session-a.jsonl")
+    _pending_record(project, transcript, age=hooks.PENDING_GRACE_SECONDS + 1)
+    recover = [sys.executable, "-m", "memsearch", "hook", "recover", str(project)]
+
+    payload = _json(_invoke(["session-start", "--platform", "claude"], {}))
+    assert [call[0] for call in spawns] == [recover]
+    assert spawns[0][2]["MEMSEARCH_IN_STOP_WORKER"] == "1"
+    assert payload["systemMessage"].endswith(" | recovering 1 earlier turn(s) in the background")
+
+    spawns.clear()
+    _fake_bin(tmp_path, "claude", 'echo "- A summary."\n')
+    fresh = _claude_transcript(tmp_path / "session-b.jsonl", uuid="turn-b")
+    payload = _json(_invoke(["stop", "--platform", "claude"], {"transcript_path": str(fresh)}))
+    assert [call[0] for call in spawns] == [hooks._index_argv(_memory(project)), recover]
+    assert payload == {"systemMessage": "[memsearch] turn captured | recovering 1 earlier turn(s) in the background"}
+
+
+def test_recover_journals_the_turn_into_the_day_it_happened(project, tmp_path, monkeypatch):
+    _fake_bin(tmp_path, "claude", 'echo "- Recovered summary."\n')
+    transcript = _claude_transcript(tmp_path / "session-a.jsonl", uuid="turn-a")
+    _pending_record(project, transcript, now="2026-03-02T09:15:00", age=hooks.PENDING_GRACE_SECONDS + 1)
+    indexed: list[str] = []
+    monkeypatch.setattr(hooks, "_run_index", lambda memory, cwd: indexed.append(str(memory)))
+
+    assert _json(_invoke(["recover", str(project)])) == {"systemMessage": "[memsearch] recovered 1 turn(s)"}
+
+    text = (_memory(project) / "2026-03-02.md").read_text(encoding="utf-8")
+    assert text == (
+        "\n## Session 09:15\n\n### 09:15\n"
+        f"<!-- session:session-a turn:turn-a transcript:{transcript} -->\n- Recovered summary.\n\n"
+    )
+    assert list(_pending(project).iterdir()) == []
+    assert indexed == [str(_memory(project))]
+
+
+def test_recover_takes_the_recorded_turn_even_after_the_session_went_on(project, tmp_path, monkeypatch):
+    """The transcript grew after the record (a resumed session): the recorded uuid wins."""
+    _fake_bin(tmp_path, "claude", 'grep -o "First question\\|Second question" | head -n 1 | sed "s/^/- /"\n')
+    rows = [
+        {"type": "user", "uuid": "turn-a", "message": {"content": "First question"}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "First answer."}]}},
+        {"type": "user", "uuid": "turn-b", "message": {"content": "Second question"}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "Second answer."}]}},
+    ]
+    transcript = tmp_path / "session-a.jsonl"
+    transcript.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    _pending_record(project, transcript, uuid="turn-a", age=hooks.PENDING_GRACE_SECONDS + 1)
+    monkeypatch.setattr(hooks, "_run_index", lambda memory, cwd: None)
+
+    _invoke(["recover", str(project)])
+
+    text = (_memory(project) / "2026-03-02.md").read_text(encoding="utf-8")
+    assert "turn:turn-a" in text and "- First question" in text
+    assert "turn-b" not in text and "Second" not in text
+
+
+def test_recover_never_writes_a_turn_twice(project, tmp_path, monkeypatch):
+    """The append landed, then the worker died before deleting its claim."""
+    _fake_bin(tmp_path, "claude", 'echo "- Again."\n')
+    transcript = _claude_transcript(tmp_path / "session-a.jsonl", uuid="turn-a")
+    journal = _memory(project) / "2026-03-02.md"
+    journal.write_text(
+        f"\n## Session 09:15\n\n### 09:15\n<!-- session:session-a turn:turn-a transcript:{transcript} -->\n- Once.\n\n"
+    )
+    record = _pending_record(project, transcript, age=hooks.PENDING_GRACE_SECONDS + 1)
+    stale_claim = record.with_name("session-a-turn-a.json.999.working")
+    record.rename(stale_claim)
+    _age(stale_claim, hooks.PENDING_WORKING_STALE_SECONDS + 1)
+    indexed: list[str] = []
+    monkeypatch.setattr(hooks, "_run_index", lambda memory, cwd: indexed.append(str(memory)))
+
+    _invoke(["recover", str(project)])
+
+    assert journal.read_text(encoding="utf-8").count("turn:turn-a") == 1
+    assert list(_pending(project).iterdir()) == []
+    assert indexed == []  # nothing new to index
+
+
+def test_recover_drops_a_record_whose_transcript_is_gone(project, tmp_path, monkeypatch):
+    _pending_record(project, tmp_path / "vanished.jsonl", age=hooks.PENDING_GRACE_SECONDS + 1)
+    monkeypatch.setattr(hooks, "_run_index", lambda memory, cwd: None)
+
+    assert _json(_invoke(["recover", str(project)])) == {"systemMessage": "[memsearch] recovered 0 turn(s)"}
+
+    assert list(_pending(project).iterdir()) == []
+    assert list(_memory(project).glob("*.md")) == []
+
+
+def test_recover_skips_a_record_another_worker_claimed(project, tmp_path, monkeypatch):
+    transcript = _claude_transcript(tmp_path / "session-a.jsonl")
+    record = _pending_record(project, transcript, age=hooks.PENDING_GRACE_SECONDS + 1)
+    monkeypatch.setattr(hooks, "_pending_claim", lambda path: None)
+    monkeypatch.setattr(hooks, "_run_index", lambda memory, cwd: None)
+
+    _invoke(["recover", str(project)])
+
+    assert record.exists()
+    assert list(_memory(project).glob("*.md")) == []
