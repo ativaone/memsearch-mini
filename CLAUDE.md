@@ -41,6 +41,10 @@ search → expand → transcript. Runtime state lives under `$MEMSEARCH_MINI_HOM
 
 - **Never write outside `$MEMSEARCH_MINI_HOME` and `<project>/.memsearch-mini`.** The plugin checkout is
   read-only at runtime: no virtualenv, no cache, no state inside it.
+- **Any work on the plugin means this repository.** Fixes, features, refactors, docs — all of it.
+  The plugin is also installed in the very environment that develops it; installed copies
+  (Claude's plugin cache, `~/.codex`, `~/.agents`) are deployment artifacts, never edit targets —
+  changes land here and reach installs via reinstall/update.
 - **Never move `bin/`, `hooks/`, `skills/` or `.claude-plugin/` into a subdirectory.** The root is
   the plugin root and `marketplace.json` points at `"./"`.
 - **One version, three files:** `pyproject.toml`, `.claude-plugin/plugin.json` and
