@@ -74,11 +74,15 @@ Installing registers the hooks but does not build the runtime. Quit Claude Code 
 project directory:
 
 ```bash
-~/.claude/plugins/marketplaces/ativaone/bin/memsearch-mini index
+~/.claude/plugins/cache/ativaone/memsearch-mini/*/bin/memsearch-mini index
 ```
 
 It installs the runtime under `~/.memsearch-mini/venvs/`, downloads the embedding model (`onnx`, the
 default) or checks the API key (cloud providers), and creates the empty index, all in the foreground.
+The `*` resolves to the installed version — the copy the hooks themselves run from, printed as
+`installPath` by `claude plugin list --json`. Runtimes are keyed by plugin path, so don't use the
+launcher in the clone under `~/.claude/plugins/marketplaces/`: it builds a second runtime the hooks
+never use, and the next session still installs the real one in the background.
 Want a provider other than `onnx`? Write `~/.memsearch-mini/config.toml` before this step (see
 [Configuration](#configuration)). The command resolves `.memsearch-mini` from the git root of the
 current directory, so run it inside the project. Open Claude Code again: the first line is
@@ -255,8 +259,8 @@ filename_suffix = ""  # "hostname" writes YYYY-MM-DD-<host>.md, for a memory fol
 ```
 
 Read and write it with the CLI, always through the launcher in the plugin directory (for a
-marketplace install that is under `~/.claude/plugins/marketplaces/ativaone/`; for Codex it is
-`<checkout>/bin/memsearch-mini`):
+marketplace install that is under `~/.claude/plugins/cache/ativaone/memsearch-mini/<version>/`; for
+Codex it is `<checkout>/bin/memsearch-mini`):
 
 ```bash
 bin/memsearch-mini config list
