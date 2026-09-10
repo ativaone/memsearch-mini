@@ -70,17 +70,32 @@ markdown, indexes it locally, and hands the relevant parts back the next time th
 /plugin install memsearch-mini@ativaone
 ```
 
-The first session prints:
+Installing registers the hooks but does not build the runtime. Quit Claude Code and run, from the
+project directory:
+
+```bash
+~/.claude/plugins/marketplaces/ativaone/bin/memsearch-mini index
+```
+
+It installs the runtime under `~/.memsearch-mini/venvs/`, downloads the embedding model (`onnx`, the
+default) or checks the API key (cloud providers), and creates the empty index, all in the foreground.
+Want a provider other than `onnx`? Write `~/.memsearch-mini/config.toml` before this step (see
+[Configuration](#configuration)). The command resolves `.memsearch-mini` from the git root of the
+current directory, so run it inside the project. Open Claude Code again: the first line is
 
 ```
-[memsearch-mini] installing runtime in the background — memory available from the next session
+[memsearch-mini v…] embedding: onnx/gpahal/bge-m3-onnx-int8 | index: 0 chunks … | memory: <dir>
 ```
 
-A detached `uv sync` is building the runtime under `~/.memsearch-mini/venvs/`, logging to the `.log` file
-beside it. When it finishes it runs the SessionStart hook once, so the model download and the first
-index build start immediately instead of waiting for the next session. Until the runtime is ready,
-the Stop and UserPromptSubmit hooks print `{}` and do nothing — that first session is not captured,
-on purpose, because a 90 MB download does not belong inside a hook timeout.
+and every turn from then on is captured.
+
+Skipped the step? The plugin bootstraps itself. The next SessionStart prints
+`[memsearch-mini] installing runtime in the background — memory available from the next session`, a
+detached `uv sync` builds the runtime (logging to the `.log` file beside it) and then runs the
+SessionStart hook once, so the model download and the first index start right away. Until the
+runtime is ready, the Stop and UserPromptSubmit hooks print `{}` and do nothing — that session is
+not captured, on purpose, because a 90 MB download does not belong inside a hook timeout. Under a
+sandbox that kills background children, prefer the foreground step; see [Sandbox](#sandbox).
 
 For local development, point Claude Code at a working tree instead of the marketplace:
 
@@ -367,18 +382,14 @@ Wrappers usually add `--unshare-pid` and `--die-with-parent`. Together they mean
 the session**: when `claude` exits, the PID namespace is torn down and every detached child dies with
 it — exactly the children this plugin relies on. It is built to survive that:
 
-- **First install.** The detached `uv sync` (≈90 MB), the model download (a few hundred MB) and the
-  first index all run in the background of the first session. Quit before they finish and the sync
-  lock (`~/.memsearch-mini/venvs/<hash>.lock`) is left behind: sessions in the next 30 minutes give up at
-  once and print `installing runtime in the background` again, then the lock goes stale and the next
-  session retries. The model download resumes from its `.incomplete` files. To skip the waiting, run
-  the sync in the foreground, outside the wrapper, then keep one session open until
-  `~/.memsearch-mini/index.log` shows the model arrived:
-
-  ```bash
-  ~/.claude/plugins/marketplaces/ativaone/bin/memsearch-mini --sync   # Claude Code marketplace install
-  /path/to/memsearch-mini/bin/memsearch-mini --sync                   # --plugin-dir, or Codex
-  ```
+- **First install.** Follow the foreground step in [Install — Claude Code](#install--claude-code)
+  (for `--plugin-dir` or Codex the launcher is `/path/to/memsearch-mini/bin/memsearch-mini index`):
+  nothing is left running in the background. If you skipped it, the detached `uv sync` (≈90 MB),
+  the model download (a few hundred MB) and the first index all run in the background of the next
+  session. Quit before they finish and the sync lock (`~/.memsearch-mini/venvs/<hash>.lock`) is left
+  behind: sessions in the next 30 minutes give up at once and print `installing runtime in the
+  background` again, then the lock goes stale and the next session retries. The model download
+  resumes from its `.incomplete` files.
 
 - **Indexer killed mid-run.** The next `SessionStart` sees journals newer than the index and
   reindexes.
