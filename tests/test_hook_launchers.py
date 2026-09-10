@@ -546,6 +546,16 @@ def test_sync_log_is_truncated_when_it_grows_past_1mb(plugin: Plugin) -> None:
     assert plugin.sync_log.stat().st_size == 0
 
 
+def test_prepare_log_is_silent_before_the_log_exists(plugin: Plugin) -> None:
+    """First run ever: no log yet. bash's redirect error must not leak."""
+    assert not plugin.sync_log.exists()
+
+    result = plugin.bash("_prepare_log; echo rc=$?")
+
+    assert "rc=0" in result.stdout
+    assert result.stderr == ""
+
+
 def test_extras_args_defaults_to_onnx_only(plugin: Plugin) -> None:
     result = plugin.bash("extras_args")
 

@@ -102,7 +102,9 @@ venv_ready() {
 _prepare_log() {
   local size=0
   mkdir -p "$MEMSEARCH_MINI_HOME" "${SYNC_LOG%/*}" 2>/dev/null
-  size="$(wc -c <"$SYNC_LOG" 2>/dev/null)" || size=0
+  # 2> before <: redirects apply left to right, so on the first run (no log
+  # yet) the failing < would otherwise print bash's own error to the host.
+  size="$(wc -c 2>/dev/null <"$SYNC_LOG")" || size=0
   case "$size" in ''|*[!0-9]*) size=0 ;; esac
   [ "$size" -gt 1048576 ] && : >"$SYNC_LOG"
   return 0
