@@ -48,7 +48,9 @@ class Turn:
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    with open(path, encoding="utf-8") as f:
+    # errors="replace": hosts occasionally write malformed bytes, and recall must degrade
+    # to a readable turn rather than traceback on a UnicodeDecodeError.
+    with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
             if not line:

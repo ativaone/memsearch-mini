@@ -190,6 +190,20 @@ def test_user_authored_tags_are_kept(tmp_path: Path) -> None:
     assert tr.parse_transcript(p)[0].text == "<demanda>keep this</demanda> please"
 
 
+def test_malformed_bytes_degrade_instead_of_raising(tmp_path: Path) -> None:
+    """A host that appends a non-UTF-8 byte must not make the L3 recall step traceback."""
+    p = tmp_path / "bad.jsonl"
+    p.write_bytes(
+        b'{"type":"user","uuid":"u","message":{"content":"caf\xe9"}}\n'
+        b'{"type":"assistant","uuid":"a","message":{"content":[{"type":"text","text":"ok"}]}}\n'
+    )
+
+    turns = tr.parse_transcript(p)
+
+    assert [(t.role, t.uuid) for t in turns] == [("user", "u"), ("assistant", "a")]
+    assert turns[0].text.startswith("caf")
+
+
 def test_assistant_text_is_never_stripped(tmp_path: Path) -> None:
     rows = [
         _user("q"),

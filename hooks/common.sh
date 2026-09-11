@@ -52,6 +52,12 @@ _venv_id() {
 # The environment lives under $MEMSEARCH_MINI_HOME, never inside the checkout: a
 # marketplace install is a tarball extraction that /plugin update replaces.
 VENV="${UV_PROJECT_ENVIRONMENT:-$MEMSEARCH_MINI_HOME/venvs/$(_venv_id)}"
+# uv resolves a relative UV_PROJECT_ENVIRONMENT against the project root, not
+# the cwd (verified with uv 0.12.12), so the bookkeeping below has to point at
+# the same place — otherwise stamp, log, lock and .root scatter into whatever
+# directory the hook happened to run in. `${SYNC_LOG%/*}` also needs a
+# directory component to expand to anything but the filename itself.
+case "$VENV" in /*) ;; *) VENV="$ROOT/$VENV" ;; esac
 export UV_PROJECT_ENVIRONMENT="$VENV"
 SYNC_STAMP="$VENV/.memsearch-mini-synced"
 # Log and lock are siblings of the venv, never inside it: uv refuses to create
@@ -124,8 +130,10 @@ sync_now() {
   # succeeds or not: an install path that later disappears — a plugin update
   # replaces the versioned directory — is what makes the environment collectable
   # (see _sweep_orphan_venvs). A half-built environment is orphaned just as much.
-  printf '%s\n' "$ROOT" >"$VENV.root" 2>/dev/null
-  printf '=== %s uv sync %s ===\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)" "$ROOT" >>"$SYNC_LOG" 2>/dev/null
+  # 2> first, as in _prepare_log: redirects apply left to right, so a failing
+  # write redirect would otherwise print bash's own error to the host.
+  printf '%s\n' "$ROOT" 2>/dev/null >"$VENV.root"
+  printf '=== %s uv sync %s ===\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)" "$ROOT" 2>/dev/null >>"$SYNC_LOG"
   uv sync --project "$ROOT" --frozen $(extras_args) >>"$SYNC_LOG" 2>&1 && extras_args >"$SYNC_STAMP"
   rc=$?
   rmdir "$SYNC_LOCK" 2>/dev/null

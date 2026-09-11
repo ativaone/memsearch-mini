@@ -185,7 +185,8 @@ def expand(chunk_id: str, lines: int | None, json_output: bool) -> None:
     else:
         top, bottom = max(0, hit.start_line - 1 - lines), min(len(all_lines), hit.end_line + lines)
         content, first, last = "\n".join(all_lines[top:bottom]), top + 1, bottom
-    match = _ANCHOR.search(content)
+    # The chunk's own lines first: a widened section may open with a sibling turn's anchor.
+    match = _ANCHOR.search("\n".join(all_lines[hit.start_line - 1 : hit.end_line])) or _ANCHOR.search(content)
     anchor = ({"session": match["session"], "turn": match["turn"] or "", "kind": match["kind"],
                "transcript": match["path"]} if match else None)  # fmt: skip
     if json_output:
@@ -203,15 +204,34 @@ def _extract_section(all_lines: list[str], start_line: int, heading_level: int) 
     """The chunk's whole section as ``(text, first line, last line)``: back to its
     own heading, forward to the next heading of equal or higher level."""
 
+    # A sub-chunk of a split section can start inside a fenced block, where `# ...` is
+    # shell, not a heading; scanning out of one would bound the section on that line.
+    # Only *paired* fences count: mechanical_summary truncates the last message at a
+    # fixed size, so a journal can carry an opening ``` with no closer, and treating
+    # that as a fence to EOF would hide every real heading after it.
+    fenced: set[int] = set()
+    opener = -1
+    for i, line in enumerate(all_lines):
+        if line.lstrip().startswith(("```", "~~~")):
+            if opener < 0:
+                opener = i
+            else:
+                fenced.update(range(opener, i + 1))  # the fence lines themselves count as inside
+                opener = -1
+
     def bound(indices: range, fallback: int) -> int:
         for i in indices:
             line = all_lines[i]
+            if i in fenced:
+                continue
             if line.startswith("#") and len(line) - len(line.lstrip("#")) <= heading_level:
                 return i
         return fallback
 
-    # With heading_level 0 no line ever satisfies bound(), so both fall back.
-    start = bound(range(start_line - 2, -1, -1), start_line - 1)  # 0-indexed
+    # With heading_level 0 no line ever satisfies bound(), so both fall back.  The backward
+    # scan starts on the chunk's own first line: a chunk that opens with its heading stops
+    # there instead of swallowing the previous sibling section.
+    start = bound(range(start_line - 1, -1, -1), start_line - 1)  # 0-indexed
     end = bound(range(start_line, len(all_lines)), len(all_lines))
     return "\n".join(all_lines[start:end]), start + 1, end
 

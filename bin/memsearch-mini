@@ -40,8 +40,19 @@ if [ "${1:-}" = "--sync" ]; then
   exit 1
 fi
 
-venv_ready || sync_now || {
-  echo "[memsearch-mini] runtime not ready; see $SYNC_LOG" >&2
-  exit 1
-}
-exec uv run --project "$ROOT" --frozen --no-sync $(extras_args) memsearch-mini "$@"
+if [ "${1:-}" = "hook" ]; then
+  # A hook budget is 5-30 seconds; a cold sync is minutes. The launcher already
+  # gated on venv_ready, so reaching this means the answer flipped in between (a
+  # touched uv.lock, a rewritten stamp). Same policy as hooks/stop.sh: print one
+  # JSON object, lose this turn on purpose, and let SessionStart do the install.
+  venv_ready || {
+    printf '%s\n' '{}'
+    exit 0
+  }
+else
+  venv_ready || sync_now || {
+    echo "[memsearch-mini] runtime not ready; see $SYNC_LOG" >&2
+    exit 1
+  }
+fi
+exec uv run --project "$ROOT" --frozen --no-sync $(extras_args) memsearch-mini ${1+"$@"}

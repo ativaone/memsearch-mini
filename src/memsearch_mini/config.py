@@ -104,7 +104,9 @@ class Config:
         return cfg
 
 
-_INT_FIELDS = {"max_chunk_size", "overlap_lines", "min_chunk_size", "batch_size"}
+# Integer fields mapped to their floor: a max_chunk_size below 1 makes the chunker's hard
+# split loop forever, and the other three are counts, so a negative value is meaningless.
+_INT_FIELDS = {"max_chunk_size": 1, "overlap_lines": 0, "min_chunk_size": 0, "batch_size": 0}
 _BOOL_FIELDS = {"summarize_enabled"}
 _CHOICE_FIELDS = {"filename_suffix": ("", "hostname")}
 
@@ -162,7 +164,10 @@ def get_value(key: str, cfg: Config | None = None) -> Any:
 
 def coerce(name: str, value: str) -> Any:
     if name in _INT_FIELDS:
-        return int(value)
+        number, floor = int(value), _INT_FIELDS[name]
+        if number < floor:
+            raise ValueError(f"Expected an integer >= {floor} for {name}, got {value!r}")
+        return number
     if name in _BOOL_FIELDS:
         lowered = value.strip().lower()
         if lowered in {"1", "true", "yes", "on"}:
@@ -180,6 +185,9 @@ def set_value(key: str, value: str, path: Path | None = None) -> Any:
     section, name = _split_key(key)
     stored = coerce(name, value)
     raw = load_raw(path)
+    if section in raw and not isinstance(raw[section], dict):
+        raise ValueError(f"[{section}] in {path or config_path()} holds a value, not a section; "
+                         f"fix the file by hand before setting {key}")  # fmt: skip
     raw.setdefault(section, {})[name] = stored
     save(raw, path)
     return stored

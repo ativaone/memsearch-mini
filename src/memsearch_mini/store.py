@@ -10,7 +10,8 @@ Plain ``Store.open(path)`` is query mode: it writes no identity and checks none,
 so ``search`` / ``expand`` / ``stats`` open the database *before* building an
 embedder, reading :attr:`provider` / :attr:`model` / :attr:`dimension` to build
 the one it was written with.  Query mode takes no write transaction while the
-schema is current, so it never contends with a running indexer.
+schema is current and ``chunks`` agrees with ``chunks_fts``, so it does not contend
+with a running indexer; a drifted pair is repaired under one write transaction on open.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ import sqlite3
 import sys
 import time
 from collections.abc import Iterable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,10 @@ _FTS_MISSING = (
     "this SQLite build has no FTS5 module, so keyword search is unavailable. Use a Python whose "
     "sqlite3 was built with FTS5, or set MEMSEARCH_MINI_NO_FTS=1 for dense-vector search only."
 )
+# Drift between the two tables, read without a write lock (see _resolve_fts).
+_FTS_ORPHAN_ROWIDS = "SELECT rowid FROM chunks_fts EXCEPT SELECT id FROM chunks"
+_FTS_MISSING_ROWS = ("SELECT id, content FROM chunks WHERE id IN"
+                     " (SELECT id FROM chunks EXCEPT SELECT rowid FROM chunks_fts)")  # fmt: skip
 # unicode61 treats CJK ideographs, kana and hangul as token characters, so a whole
 # run collapses into one token.  Characters in these ranges are split out instead.
 _CJK_RANGES = ((0x2E80, 0x2FFF), (0x3040, 0x30FF), (0x3400, 0x4DBF), (0x4E00, 0x9FFF), (0xA000, 0xA4CF),
@@ -186,11 +191,13 @@ class Store:
         conn.execute("BEGIN IMMEDIATE")
         try:
             yield conn
+            # The COMMIT belongs inside: one that fails must roll back too, or the connection
+            # stays in a transaction every later _write() silently joins and never commits.
+            conn.commit()
+            self._writes += 1
         except BaseException:
             conn.rollback()
             raise
-        conn.commit()
-        self._writes += 1
 
     # -- schema ------------------------------------------------------------------
 
@@ -217,26 +224,62 @@ class Store:
         self.fts_enabled = self._resolve_fts()
 
     def _resolve_fts(self) -> bool:
-        """Create the FTS5 table, or probe it — taking no write lock once it exists."""
+        """Create the FTS5 table, or reconcile it — taking no write lock while it agrees.
+
+        A run under ``MEMSEARCH_MINI_NO_FTS=1`` (or a build with no fts5 module) writes chunks
+        without their keyword rows, so an existing table is compared against ``chunks`` and
+        repaired; only real drift takes the write lock, and the two queries double as the probe.
+        """
         if os.environ.get("MEMSEARCH_MINI_NO_FTS") == "1":
             return False
-        create = not self._table_exists("chunks_fts")
         try:
-            if create:
+            if not self._table_exists("chunks_fts"):
                 with self._write() as conn:
                     conn.execute(_FTS_DDL)
-                    # Backfill, so a database indexed under MEMSEARCH_MINI_NO_FTS=1 does
-                    # not come back with a silently half-empty keyword index.
-                    rows = conn.execute("SELECT id, content FROM chunks").fetchall()
-                    pairs = [(rowid, fts_text(content)) for rowid, content in rows]
-                    conn.executemany("INSERT INTO chunks_fts (rowid, text) VALUES (?, ?)", pairs)
-            else:
-                self._conn.execute("SELECT rowid FROM chunks_fts LIMIT 1").fetchone()
+                    self._backfill_fts(conn, conn.execute("SELECT id, content FROM chunks").fetchall())
+            elif any(self._fts_drift()):  # the unlocked probe: agreement costs no write lock
+                try:
+                    with self._write() as conn:
+                        # Recomputed under BEGIN IMMEDIATE, which serialises writers: two
+                        # processes that saw the same drift would otherwise both backfill,
+                        # and the loser's INSERT on a live rowid raises IntegrityError.
+                        orphans, missing = self._fts_drift()
+                        conn.executemany("DELETE FROM chunks_fts WHERE rowid = ?", [(r,) for r in orphans])
+                        self._backfill_fts(conn, missing)
+                except sqlite3.OperationalError as exc:
+                    # A read-only copy keeps the keyword rows it has — still usable, and the
+                    # drift heals the next time a writer opens the index.
+                    if "readonly" not in str(exc).lower():
+                        raise
         except sqlite3.OperationalError as exc:
             if "no such module" in str(exc).lower():
                 raise StoreError(_FTS_MISSING) from exc
             raise
         return True
+
+    def _fts_drift(self) -> tuple[list[int], list[tuple[int, str]]]:
+        """Keyword rows whose chunk is gone, and chunks whose keyword row was never written."""
+        orphans = [row[0] for row in self._conn.execute(_FTS_ORPHAN_ROWIDS)]
+        return orphans, self._conn.execute(_FTS_MISSING_ROWS).fetchall()
+
+    @staticmethod
+    def _backfill_fts(conn: sqlite3.Connection, rows: list[tuple[int, str]]) -> None:
+        pairs = [(rowid, fts_text(content)) for rowid, content in rows]
+        conn.executemany("INSERT INTO chunks_fts (rowid, text) VALUES (?, ?)", pairs)
+
+    def _fts_clear(self, conn: sqlite3.Connection, rowids: list[tuple[int]] | None = None) -> None:
+        """Drop keyword rows whenever the table exists — *fts_enabled* is not the condition.
+
+        A session that opened without FTS still deletes chunks, and a keyword row left behind
+        answers for whichever chunk later reuses that id.  ``None`` clears the whole table.
+        """
+        if not self._table_exists("chunks_fts"):
+            return
+        with suppress(sqlite3.OperationalError):  # no fts5 module here; _resolve_fts heals it later
+            if rowids is None:
+                conn.execute("DELETE FROM chunks_fts")
+            else:
+                conn.executemany("DELETE FROM chunks_fts WHERE rowid = ?", rowids)
 
     def _check_identity(self, provider: str, model: str, dimension: int, allow_rebuild: bool) -> None:
         stored = (self._meta_get("provider"), self._meta_get("model"), self._meta_get("dimension"))
@@ -348,8 +391,7 @@ class Store:
     def reset(self) -> None:
         """Empty the index, keeping the file and the embedding identity."""
         with self._write() as conn:
-            if self.fts_enabled:
-                conn.execute("DELETE FROM chunks_fts")
+            self._fts_clear(conn)
             conn.execute("DELETE FROM chunks")
             conn.execute("DELETE FROM meta WHERE key = 'last_index_at'")
 
@@ -358,8 +400,7 @@ class Store:
             return 0
         params = [(rowid,) for rowid in rowids]
         with self._write() as conn:
-            if self.fts_enabled:
-                conn.executemany("DELETE FROM chunks_fts WHERE rowid = ?", params)
+            self._fts_clear(conn, params)
             conn.executemany("DELETE FROM chunks WHERE id = ?", params)
         return len(rowids)
 

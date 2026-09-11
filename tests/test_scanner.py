@@ -56,6 +56,14 @@ def test_scan_deduplicates_and_sorts(tmp_path: Path):
     assert [r.path.name for r in results] == ["a.md", "b.md"]
 
 
+def test_scan_skips_a_dangling_symlink_instead_of_aborting(tmp_path: Path):
+    """index_paths isolates failures per file; a broken link must not stop the whole scan."""
+    (tmp_path / "good.md").write_text("# Good")
+    (tmp_path / "broken.md").symlink_to(tmp_path / "gone.md")
+
+    assert [r.path.name for r in scan_paths([tmp_path])] == ["good.md"]
+
+
 def test_scan_skips_paths_that_do_not_exist(tmp_path: Path):
     assert scan_paths([tmp_path / "nowhere", tmp_path / "nowhere.md"]) == []
     assert scan_paths([]) == []

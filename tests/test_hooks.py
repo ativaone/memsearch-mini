@@ -851,6 +851,18 @@ def test_recover_skips_a_record_another_worker_claimed(project, tmp_path, monkey
     assert list(_memory(project).glob("*.md")) == []
 
 
+def test_claiming_a_record_restarts_the_working_grace(project, tmp_path):
+    """rename() keeps the old mtime, so an old record would be claimable again at once."""
+    transcript = _claude_transcript(tmp_path / "session-a.jsonl")
+    record = _pending_record(project, transcript, age=7200)  # two hours: past every grace period
+
+    claimed = hooks._pending_claim(record)
+
+    assert claimed is not None and claimed.name.endswith(".working")
+    assert time.time() - claimed.stat().st_mtime < 5
+    assert hooks._stale_pending(_pending(project)) == []  # no second worker re-claims it
+
+
 # --- orphaned runtime environments --------------------------------------------
 
 

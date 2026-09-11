@@ -44,6 +44,23 @@ JOURNAL_NEW = """# 2026-09-09
 - Edgar reviewed the embedding provider defaults for ONNX.
 """
 
+JOURNAL_SIBLINGS = """# 2026-09-10
+
+## Session 10:00
+
+### 10:00
+<!-- session:s-three turn:turn-one transcript:/tmp/claude/s-three.jsonl -->
+- Edgar asked about the first sibling topic: kangaroo.
+
+### 10:05
+<!-- session:s-three turn:turn-two transcript:/tmp/claude/s-three.jsonl -->
+- Edgar asked about the second sibling topic: platypus.
+
+### 10:10
+<!-- session:s-three turn:turn-three transcript:/tmp/claude/s-three.jsonl -->
+- Edgar asked about the third sibling topic: wombat.
+"""
+
 CLAUDE_TRANSCRIPT = [
     {"type": "user", "uuid": "u-one", "message": {"role": "user", "content": "which store did we pick?"}},
     {
@@ -260,10 +277,10 @@ def test_expand_returns_the_section_and_a_transcript_anchor(project) -> None:
 
     assert payload["chunk_id"] == hit["chunk_id"]
     assert payload["source"] == hit["source"]
-    assert payload["content"].startswith("## Session 09:00")
+    assert payload["content"].startswith("### 09:00")  # back to its own heading, not the parent's
     assert "- Claude Code dropped the vector server dependency." in payload["content"]
     assert "## Session 11:30" not in payload["content"]  # stops at the next sibling heading
-    assert payload["start_line"] < hit["start_line"]
+    assert (payload["start_line"], payload["end_line"]) == (hit["start_line"], hit["end_line"])
     assert payload["anchor"] == {"session": "s-one", "turn": "t-abc",
                                  "kind": "transcript", "transcript": "/tmp/claude/s-one.jsonl"}  # fmt: skip
 
@@ -307,6 +324,58 @@ def test_expand_lines_mode_windows_around_the_chunk(project) -> None:
     assert payload["start_line"] == max(1, hit["start_line"] - 2)
     assert payload["end_line"] == min(total, hit["end_line"] + 2)
     assert payload["content"].splitlines()[0] == "## Session 09:00"
+
+
+def test_expand_stays_inside_the_chunks_own_turn(wired) -> None:
+    """Sibling turns under one session: expanding the third must not hand back the second."""
+    memory = wired / ".memsearch-mini" / "memory"
+    memory.mkdir(parents=True)
+    (memory / "2026-09-10.md").write_text(JOURNAL_SIBLINGS, encoding="utf-8")
+    run("index")
+    hit = chunk_containing("wombat")
+
+    payload = json.loads(run("expand", hit["chunk_id"], "--json").stdout)
+
+    assert payload["content"].startswith("### 10:10")
+    assert "platypus" not in payload["content"]
+    assert payload["anchor"]["turn"] == "turn-three"
+
+
+def test_expand_lines_mode_anchors_to_the_chunks_own_turn(wired) -> None:
+    """--lines reaches back past the chunk by construction, so the window opens inside
+    the previous sibling; the anchor must still come from the chunk's own lines."""
+    memory = wired / ".memsearch-mini" / "memory"
+    memory.mkdir(parents=True)
+    (memory / "2026-09-10.md").write_text(JOURNAL_SIBLINGS, encoding="utf-8")
+    run("index")
+    hit = chunk_containing("wombat")
+
+    payload = json.loads(run("expand", hit["chunk_id"], "--lines", "6", "--json").stdout)
+
+    assert "turn-two" in payload["content"]  # the window really reaches the sibling's anchor
+    assert payload["anchor"]["turn"] == "turn-three"
+
+
+def test_expand_never_takes_a_comment_in_a_code_fence_for_a_heading() -> None:
+    """A long section is split into sub-chunks, so one can start inside a fenced
+    block; `# ...` there is shell, not markdown, and must not bound the section."""
+    lines = ["### real heading", "", "```bash", "# fake heading", "echo hi", "```", "tail"]
+
+    content, first, last = cli_module._extract_section(lines, 4, 3)
+
+    assert content.startswith("### real heading")
+    assert (first, last) == (1, 7)
+
+
+def test_an_unclosed_fence_does_not_hide_the_headings_after_it() -> None:
+    """mechanical_summary truncates the last message at a fixed size, so a journal can
+    carry an opening ``` with no closer; only paired fences may hide heading lines."""
+    lines = ["# d", "", "### a", "- one", "", "### b", "- two", "```diff", "@@ cut", "", "### c", "- three"]
+
+    content, first, last = cli_module._extract_section(lines, 11, 3)
+
+    assert content.startswith("### c")
+    assert (first, last) == (11, 12)
 
 
 def test_expand_rejects_an_unknown_chunk_id(project) -> None:

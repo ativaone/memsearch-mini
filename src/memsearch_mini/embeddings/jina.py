@@ -97,4 +97,7 @@ class JinaEmbedding:
         )
         resp.raise_for_status()
         payload = resp.json()
-        return [item["embedding"] for item in payload["data"]]
+        # Items are numbered instead of order-guaranteed; sorted() is stable, so
+        # a payload with no index fields keeps its wire order.  `or 0` also covers
+        # an explicit null, which `.get(..., 0)` would hand to the int comparison.
+        return [item["embedding"] for item in sorted(payload["data"], key=lambda item: item.get("index") or 0)]

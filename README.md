@@ -120,13 +120,17 @@ bash memsearch-mini/codex/install.sh
 The installer runs five steps: it checks for `uv`; runs a blocking `bin/memsearch-mini --sync`; copies
 `codex/skills/memory-recall` to `~/.agents/skills/memory-recall`; backs up `~/.codex/hooks.json` to
 `~/.codex/hooks.json.bak` and merges in three entries (SessionStart 10 s, UserPromptSubmit 5 s,
-Stop 30 s); sets `hooks = true` under `[features]` in `~/.codex/config.toml`; and marks the scripts
-executable. Set `MEMSEARCH_MINI_SKIP_SYNC=1` to skip the blocking sync and let the first session do it.
+Stop 30 s); sets `hooks = true` under `[features]` in `~/.codex/config.toml`, backing that file up to
+`config.toml.bak` too — or, when the edit would leave the file unparseable, refuses it and asks you to
+set the flag by hand; and marks the scripts executable. Either backup is written only while no `.bak`
+is there yet, so a reinstall never overwrites the pre-plugin copy. Set `MEMSEARCH_MINI_SKIP_SYNC=1` to
+skip the blocking sync and let the first session do it.
 
 The checkout path is baked into both `~/.codex/hooks.json` and the installed skill, so **re-run the
 installer after moving or renaming the clone**. It is idempotent: it strips its own old entries
-(matching any `/hooks/<script>`) as well as upstream's (`plugins/codex/hooks/<script>`) before
-writing, and leaves unrelated hooks alone.
+(any `/hooks/<script>` command that also ends with the ` codex` argument every entry of ours carries)
+as well as upstream's (`plugins/codex/hooks/<script>`) before writing, and leaves unrelated hooks
+alone.
 
 Codex sandboxing: the first index needs network access to download the embedding model. Upstream's
 README recommended running that first session with full access
@@ -298,7 +302,10 @@ Each provider needs its own SDK, so `bin/memsearch-mini` reads `embedding.provid
 config file and passes `--extra onnx --extra <provider>` to `uv`. The runtime remembers which extras
 it was built with, so switching provider triggers an automatic resync: the next session shows
 `installing runtime in the background` and picks it up from there, or run `bin/memsearch-mini --sync` to
-do it right away (any direct `bin/memsearch-mini <command>` call also resyncs inline first).
+do it right away (any direct `bin/memsearch-mini <command>` call also resyncs inline first). The one
+exception is `bin/memsearch-mini hook ...`: a hook budget is seconds and a cold sync is minutes, so it
+never syncs inline — finding no runtime it prints `{}`, loses that one turn and leaves the install to
+SessionStart.
 
 Switching provider or model changes the vectors, so the identity recorded in the index no longer
 matches: the next `index` run empties the database and rebuilds it (and says so on stderr), while
@@ -427,6 +434,7 @@ survived an uninstall.
 | `<project>/.memsearch-mini/index.db`, `index.lock` | Derived index; safe to delete any time | `rm -f <project>/.memsearch-mini/index.db* <project>/.memsearch-mini/index.lock` |
 | `<project>/.memsearch-mini/pending/` | Records of turns still being summarized; empty in a healthy install | Itself, or `rm -rf` |
 | `~/.codex/hooks.json`, `~/.agents/skills/memory-recall` | Codex wiring | `uninstall.sh` |
+| `~/.codex/hooks.json.bak`, `~/.codex/config.toml.bak` | Your pre-plugin backups — **kept** on purpose | You, by hand |
 | `$TMPDIR/memsearch-mini-stop.*.json` | Transient Codex work files, deleted by the worker that reads them | Itself |
 
 ### Claude Code

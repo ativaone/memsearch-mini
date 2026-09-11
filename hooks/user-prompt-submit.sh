@@ -12,5 +12,8 @@ venv_ready || {
   printf '%s\n' '{}'
   exit 0
 }
-printf '%s\n' '{"systemMessage": "[memsearch-mini] Recall available if needed"}'
+# additionalContext, not systemMessage: systemMessage only reaches the UI, so a
+# hint sent there never tells the model that recall exists (SessionStart injects
+# its memory through the same channel).
+printf '%s\n' '{"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "[memsearch-mini] Recall available if needed"}}'
 exit 0

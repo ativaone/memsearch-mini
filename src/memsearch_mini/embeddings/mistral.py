@@ -63,7 +63,9 @@ class MistralEmbedding:
 
     async def _embed_batch(self, texts: list[str]) -> list[list[float]]:
         resp = await self._client.embeddings.create_async(model=self._model, inputs=texts)
-        return [item.embedding for item in resp.data]
+        # The response numbers each item (OpenAI-compatible shape) instead of
+        # promising order; the SDK types index as optional, hence the `or 0`.
+        return [item.embedding for item in sorted(resp.data, key=lambda item: item.index or 0)]
 
 
 def _detect_dimension(client, model: str) -> int:

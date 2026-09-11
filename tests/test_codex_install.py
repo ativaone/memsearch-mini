@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -17,11 +18,18 @@ from pathlib import Path
 
 import pytest
 
+try:  # Python 3.11+
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10
+    import tomli as tomllib
+
 REPO = Path(__file__).resolve().parents[1]
 
 # Minimal fake uv: `command -v uv` must succeed, `uv sync` must materialise a
 # CLI, and `uv run ... python -` must reach a real interpreter (the installer
-# falls back to it when the host has no python3).
+# falls back to it when the host has no python3). The `run` branch also copies
+# the one uv behaviour this installer has to defend against: with no
+# UV_PROJECT_ENVIRONMENT, uv builds the environment at <project>/.venv.
 FAKE_UV = r"""#!/usr/bin/env bash
 set -u
 printf '%s\n' "$*" >> "$FAKE_UV_LOG"
@@ -34,10 +42,18 @@ case "${1:-}" in
     ;;
   run)
     shift
+    project=""
     while [ $# -gt 0 ]; do
       case "$1" in
-        python|python3) shift; exec "$FAKE_PYTHON" "$@" ;;
-        --project|--extra|--python) shift 2 ;;
+        --project) project="$2"; shift 2 ;;
+        python|python3)
+          if [ -z "${UV_PROJECT_ENVIRONMENT:-}" ] && [ -n "$project" ]; then
+            mkdir -p "$project/.venv"
+          fi
+          shift
+          exec "$FAKE_PYTHON" "$@"
+          ;;
+        --extra|--python) shift 2 ;;
         *) shift ;;
       esac
     done
@@ -49,7 +65,25 @@ exit 0
 
 # Everything codex/install.sh shells out to, so a PATH can be built without a
 # system python3 while the installer still works.
-CORE_TOOLS = ("bash", "dirname", "cp", "mkdir", "rm", "chmod", "cat", "sed", "grep", "ls")
+CORE_TOOLS = ("bash", "dirname", "cp", "mkdir", "rm", "chmod", "mv", "cat", "sed", "grep", "ls")
+
+
+def slim_bin(tmp_path: Path, uv_source: Path) -> Path:
+    """A PATH with the installer's core tools and uv, but no python3."""
+    slim = tmp_path / "slimbin"
+    slim.mkdir(exist_ok=True)
+    for tool in CORE_TOOLS:
+        found = shutil.which(tool)
+        if found and not (slim / tool).exists():
+            (slim / tool).symlink_to(found)
+    shutil.copy2(uv_source, slim / "uv")
+    (slim / "uv").chmod(0o755)
+    assert shutil.which("python3", path=str(slim)) is None
+    return slim
+
+
+def entries(root: Path) -> set[str]:
+    return {str(path.relative_to(root)) for path in root.rglob("*")}
 
 
 @dataclass
@@ -70,9 +104,16 @@ class Installer:
     def skill(self) -> Path:
         return self.home / ".agents" / "skills" / "memory-recall" / "SKILL.md"
 
-    def run(self, extra_env: dict[str, str] | None = None, check: bool = True) -> subprocess.CompletedProcess:
+    def run(
+        self,
+        extra_env: dict[str, str] | None = None,
+        check: bool = True,
+        drop_env: tuple[str, ...] = (),
+    ) -> subprocess.CompletedProcess:
         env = dict(self.env)
         env.update(extra_env or {})
+        for name in drop_env:
+            env.pop(name, None)
         result = subprocess.run(
             ["bash", str(self.root / "codex" / "install.sh")],
             capture_output=True,
@@ -155,7 +196,7 @@ def test_fresh_install_writes_hooks_skill_and_flag(installer: Installer) -> None
         entries = installer.hooks()["hooks"][event]
         assert len(entries) == 1
         hook = entries[0]["hooks"][0]
-        assert hook["command"] == f"bash {installer.root}/hooks/{script} codex"
+        assert hook["command"] == f'bash "{installer.root}/hooks/{script}" codex'
         assert hook["timeout"] == timeout
         assert hook["type"] == "command"
         assert "async" not in hook
@@ -166,7 +207,26 @@ def test_fresh_install_writes_hooks_skill_and_flag(installer: Installer) -> None
     assert f"{installer.root}/bin/memsearch-mini" in skill
 
 
+def test_hook_command_survives_a_checkout_path_with_spaces(installer: Installer, tmp_path: Path) -> None:
+    """The command is a shell string: an unquoted path with a space is two words."""
+    spaced = tmp_path / "check out dir"
+    shutil.copytree(installer.root, spaced)
+    spaced_installer = Installer(root=spaced, home=installer.home, env=installer.env)
+
+    spaced_installer.run()
+
+    for event, (script, _timeout) in EXPECTED.items():
+        commands = spaced_installer.memsearch_mini_commands(event)
+        assert commands == [f'bash "{spaced}/hooks/{script}" codex']
+        # The path survives as one word, exactly as written.
+        assert f"{spaced}/hooks/{script}" in commands[0]
+
+
 def test_install_is_idempotent(installer: Installer) -> None:
+    original = json.dumps({"hooks": {"Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "echo pre"}]}]}})
+    installer.hooks_file.parent.mkdir(parents=True, exist_ok=True)
+    installer.hooks_file.write_text(original, encoding="utf-8")
+
     installer.run()
     first = installer.hooks()
     installer.run()
@@ -174,9 +234,25 @@ def test_install_is_idempotent(installer: Installer) -> None:
     assert installer.hooks() == first
     for event in EXPECTED:
         assert len(installer.memsearch_mini_commands(event)) == 1
-    # The second run backs the first result up before rewriting it.
-    assert (installer.hooks_file.with_suffix(".json.bak")).exists()
+    # The pristine, pre-plugin file is what the backup has to keep holding: a
+    # second run must not overwrite it with the first run's own output.
+    assert installer.hooks_file.with_suffix(".json.bak").read_text(encoding="utf-8") == original
     assert not installer.hooks_file.with_name("hooks.json.tmp").exists()
+
+
+def test_a_third_party_hook_named_like_ours_is_never_removed(installer: Installer) -> None:
+    """`/hooks/stop.sh` is a substring, not an identity: only our own entries go."""
+    foreign = "bash /home/u/.config/othertool/hooks/stop.sh"
+    installer.hooks_file.parent.mkdir(parents=True, exist_ok=True)
+    installer.hooks_file.write_text(
+        json.dumps({"hooks": {"Stop": [{"matcher": "", "hooks": [{"type": "command", "command": foreign}]}]}}),
+        encoding="utf-8",
+    )
+
+    installer.run()
+
+    assert foreign in installer.commands("Stop")
+    assert len(installer.memsearch_mini_commands("Stop")) == 1
 
 
 def test_foreign_hooks_are_preserved(installer: Installer) -> None:
@@ -230,8 +306,8 @@ def test_legacy_upstream_entries_are_removed(installer: Installer) -> None:
 
     installer.run()
 
-    assert installer.commands("Stop") == [f"bash {installer.root}/hooks/stop.sh codex"]
-    assert installer.commands("SessionStart") == [f"bash {installer.root}/hooks/session-start.sh codex"]
+    assert installer.commands("Stop") == [f'bash "{installer.root}/hooks/stop.sh" codex']
+    assert installer.commands("SessionStart") == [f'bash "{installer.root}/hooks/session-start.sh" codex']
 
 
 def test_legacy_array_format_is_converted(installer: Installer) -> None:
@@ -299,6 +375,155 @@ def test_config_without_features_section_gains_one(installer: Installer) -> None
     assert 'model = "gpt-5.1-codex"' in text
 
 
+def test_features_header_with_a_trailing_comment_is_not_duplicated(installer: Installer) -> None:
+    """`[features]  # note` is a valid header; a second table would be invalid TOML."""
+    installer.config_file.parent.mkdir(parents=True, exist_ok=True)
+    installer.config_file.write_text("[features]  # codex feature flags\nweb_search = true\n", encoding="utf-8")
+
+    installer.run()
+
+    text = installer.config_file.read_text(encoding="utf-8")
+    assert text.count("[features]") == 1
+    assert tomllib.loads(text)["features"] == {"web_search": True, "hooks": True}
+
+
+def test_dotted_features_key_is_rewritten_in_place(installer: Installer) -> None:
+    """A dotted key already declares `features`; appending the table is a redefinition."""
+    installer.config_file.parent.mkdir(parents=True, exist_ok=True)
+    installer.config_file.write_text('features.hooks = false\n\n[tui]\ntheme = "dark"\n', encoding="utf-8")
+
+    installer.run()
+
+    text = installer.config_file.read_text(encoding="utf-8")
+    data = tomllib.loads(text)  # would raise on "cannot declare features twice"
+    assert data["features"]["hooks"] is True
+    assert data["tui"]["theme"] == "dark"
+    assert "[features]" not in text
+
+
+def test_other_dotted_features_keys_gain_a_sibling_line(installer: Installer) -> None:
+    installer.config_file.parent.mkdir(parents=True, exist_ok=True)
+    installer.config_file.write_text('features.web_search = true\n\n[tui]\ntheme = "dark"\n', encoding="utf-8")
+
+    installer.run()
+
+    text = installer.config_file.read_text(encoding="utf-8")
+    data = tomllib.loads(text)
+    assert data["features"] == {"web_search": True, "hooks": True}
+    assert data["tui"]["theme"] == "dark"
+
+
+def test_a_dotted_features_key_under_another_table_is_not_the_top_level_flag(installer: Installer) -> None:
+    """`features.hooks` inside `[profiles.dev]` is that profile's flag. Rewriting it
+    there keeps the file valid and leaves Codex itself with no hooks at all."""
+    installer.config_file.parent.mkdir(parents=True, exist_ok=True)
+    installer.config_file.write_text("[profiles.dev]\nfeatures.hooks = false\n", encoding="utf-8")
+
+    installer.run()
+
+    data = tomllib.loads(installer.config_file.read_text(encoding="utf-8"))
+    assert data["features"]["hooks"] is True
+    assert data["profiles"]["dev"]["features"]["hooks"] is False
+
+
+def test_a_real_features_section_wins_over_a_dotted_key_in_another_table(installer: Installer) -> None:
+    installer.config_file.parent.mkdir(parents=True, exist_ok=True)
+    installer.config_file.write_text(
+        "[features]\nweb_search = true\n\n[profiles.dev]\nfeatures.hooks = false\n", encoding="utf-8"
+    )
+
+    installer.run()
+
+    text = installer.config_file.read_text(encoding="utf-8")
+    data = tomllib.loads(text)
+    assert text.count("[features]") == 1
+    assert data["features"] == {"web_search": True, "hooks": True}
+    assert data["profiles"]["dev"]["features"]["hooks"] is False
+
+
+def test_another_tables_dotted_features_key_does_not_block_the_features_table(installer: Installer) -> None:
+    installer.config_file.parent.mkdir(parents=True, exist_ok=True)
+    installer.config_file.write_text("[profiles.dev]\nfeatures.web_search = true\n", encoding="utf-8")
+
+    installer.run()
+
+    data = tomllib.loads(installer.config_file.read_text(encoding="utf-8"))
+    assert data["features"] == {"hooks": True}
+    assert data["profiles"]["dev"]["features"]["web_search"] is True
+
+
+def test_an_indented_hooks_key_is_rewritten_in_place(installer: Installer) -> None:
+    """Indentation is legal TOML; a second `hooks` key beside it is not."""
+    installer.config_file.parent.mkdir(parents=True, exist_ok=True)
+    installer.config_file.write_text("[features]\n  hooks = false\n", encoding="utf-8")
+
+    installer.run()
+
+    text = installer.config_file.read_text(encoding="utf-8")
+    assert tomllib.loads(text)["features"] == {"hooks": True}
+    assert len(re.findall(r"(?m)^[ \t]*hooks[ \t]*=", text)) == 1
+
+
+def test_config_backup_is_written_once_and_never_overwritten(installer: Installer) -> None:
+    installer.config_file.parent.mkdir(parents=True, exist_ok=True)
+    original = 'model = "gpt-5.1-codex"\n'
+    installer.config_file.write_text(original, encoding="utf-8")
+    backup = installer.config_file.with_name("config.toml.bak")
+
+    installer.run()
+    assert backup.read_text(encoding="utf-8") == original
+
+    installer.run()
+    assert backup.read_text(encoding="utf-8") == original
+    assert not installer.config_file.with_name("config.toml.tmp").exists()
+
+
+def test_config_edit_survives_an_interpreter_that_can_parse_toml(installer: Installer, tmp_path: Path) -> None:
+    """The uv-managed interpreter may have tomllib/tomli, which arms the validity
+    guard; the edit itself must come out exactly the same."""
+    slim = slim_bin(tmp_path, Path(installer.env["PATH"].split(":")[0]) / "uv")
+    installer.config_file.parent.mkdir(parents=True, exist_ok=True)
+    installer.config_file.write_text("[features]  # flags\nweb_search = true\n", encoding="utf-8")
+
+    installer.run(extra_env={"PATH": str(slim)})
+
+    text = installer.config_file.read_text(encoding="utf-8")
+    assert tomllib.loads(text)["features"] == {"web_search": True, "hooks": True}
+    assert text.count("[features]") == 1
+
+
+def test_a_config_edit_that_would_break_the_toml_is_refused(installer: Installer, tmp_path: Path) -> None:
+    """The `[` continuation line hides the top-level dotted key from the region scan,
+    so the editor would append a second `features` table; with an interpreter that
+    can parse TOML the guard must refuse, warn, and leave the file alone."""
+    armed = tmp_path / "armedbin"
+    armed.mkdir()
+    # A wrapper, not a symlink: python resolves a symlink chain past pyvenv.cfg
+    # and would come up as the bare system interpreter, without tomli.
+    (armed / "python3").write_text(f'#!/bin/sh\nexec "{REPO / ".venv" / "bin" / "python"}" "$@"\n')
+    (armed / "python3").chmod(0o755)
+    installer.config_file.parent.mkdir(parents=True, exist_ok=True)
+    broken = "matrix = [\n  [1, 2],\n]\nfeatures.hooks = false\n"
+    installer.config_file.write_text(broken, encoding="utf-8")
+
+    result = installer.run(extra_env={"PATH": f"{armed}:{installer.env['PATH']}"})
+
+    assert installer.config_file.read_text(encoding="utf-8") == broken
+    assert "left untouched" in result.stdout
+
+
+def test_installer_never_builds_an_environment_inside_the_checkout(installer: Installer, tmp_path: Path) -> None:
+    """No system python3: `uv run --project` must not put a .venv in the checkout."""
+    slim = slim_bin(tmp_path, Path(installer.env["PATH"].split(":")[0]) / "uv")
+    before = entries(installer.root)
+
+    installer.run(extra_env={"PATH": str(slim)}, drop_env=("UV_PROJECT_ENVIRONMENT",))
+
+    assert not (installer.root / ".venv").exists()
+    assert entries(installer.root) == before
+    assert "__INSTALL_DIR__" not in installer.skill.read_text(encoding="utf-8")
+
+
 def test_existing_skill_directory_is_replaced(installer: Installer) -> None:
     installer.skill.parent.mkdir(parents=True, exist_ok=True)
     installer.skill.write_text("stale skill\n", encoding="utf-8")
@@ -308,6 +533,17 @@ def test_existing_skill_directory_is_replaced(installer: Installer) -> None:
 
     assert "stale skill" not in installer.skill.read_text(encoding="utf-8")
     assert not (installer.skill.parent / "leftover.md").exists()
+
+
+def test_a_skill_temp_left_by_a_crashed_run_is_cleaned_up(installer: Installer) -> None:
+    stale = installer.skill.parent.with_name("memory-recall.tmp.999")
+    stale.mkdir(parents=True)
+    (stale / "SKILL.md").write_text("half substituted __INSTALL_DIR__\n", encoding="utf-8")
+
+    installer.run()
+
+    assert not stale.exists()
+    assert "__INSTALL_DIR__" not in installer.skill.read_text(encoding="utf-8")
 
 
 def test_scripts_are_executable_after_install(installer: Installer) -> None:
@@ -345,15 +581,7 @@ def test_missing_uv_aborts_before_touching_home(installer: Installer) -> None:
 
 def test_json_merge_falls_back_to_uv_run_python(installer: Installer, tmp_path: Path) -> None:
     """No system python3: the edits go through the interpreter uv manages."""
-    slim = tmp_path / "slimbin"
-    slim.mkdir()
-    for tool in CORE_TOOLS:
-        found = shutil.which(tool)
-        if found:
-            (slim / tool).symlink_to(found)
-    shutil.copy2(Path(installer.env["PATH"].split(":")[0]) / "uv", slim / "uv")
-    (slim / "uv").chmod(0o755)
-    assert shutil.which("python3", path=str(slim)) is None
+    slim = slim_bin(tmp_path, Path(installer.env["PATH"].split(":")[0]) / "uv")
 
     installer.run(extra_env={"PATH": str(slim)})
 

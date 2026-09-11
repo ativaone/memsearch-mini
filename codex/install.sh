@@ -17,14 +17,34 @@ SKILL_DST="$HOME/.agents/skills/memory-recall"
 MEMSEARCH_MINI_HOME="${MEMSEARCH_MINI_HOME:-$HOME/.memsearch-mini}"
 # Ask the library for the environment path instead of duplicating its hashing
 # rule; a subshell keeps this script's `set -e` away from the sourced file.
-VENV="$(bash -c 'source "$1/hooks/common.sh"; printf "%s\n" "$VENV"' _ "$INSTALL_DIR" 2>/dev/null || true)"
+VENV_FROM_LIB="$(bash -c 'source "$1/hooks/common.sh"; printf "%s\n" "$VENV"' _ "$INSTALL_DIR" 2>/dev/null || true)"
+VENV="$VENV_FROM_LIB"
 [ -n "$VENV" ] || VENV="$MEMSEARCH_MINI_HOME/venvs"
 
-# The JSON/TOML edits below are the only Python this installer needs. A system
-# python3 runs them when there is one; otherwise the interpreter uv manages for
-# this checkout does, so the installer never depends on a system Python.
+# The `uv run` fallback in run_python must never build an environment inside the
+# checkout: without UV_PROJECT_ENVIRONMENT uv creates $INSTALL_DIR/.venv. Only
+# the library's answer is a real environment path — the line above is a
+# display-only placeholder — so export just that one. A value the user set
+# already wins: common.sh honours it and hands it back here unchanged.
+if [ -n "$VENV_FROM_LIB" ]; then
+  export UV_PROJECT_ENVIRONMENT="$VENV_FROM_LIB"
+fi
+UV_CACHE_DIR="${UV_CACHE_DIR:-$MEMSEARCH_MINI_HOME/uv-cache}"
+UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-$MEMSEARCH_MINI_HOME/python}"
+export UV_CACHE_DIR UV_PYTHON_INSTALL_DIR
+
+# The JSON/TOML edits below are the only Python this installer needs. Preference
+# order: a python3 that can also parse-check TOML (3.11+ tomllib, or tomli) —
+# that is what arms the config.toml validity guard — then the runtime venv's
+# interpreter (tomli is a project dependency there), then a bare python3 with
+# the guard degraded to best effort, and only last the interpreter uv manages.
 run_python() {
-  if command -v python3 >/dev/null 2>&1; then
+  if command -v python3 >/dev/null 2>&1 \
+     && { python3 -c 'import tomllib' 2>/dev/null || python3 -c 'import tomli' 2>/dev/null; }; then
+    python3 - "$@"
+  elif [ -x "$VENV/bin/python" ]; then
+    "$VENV/bin/python" - "$@"
+  elif command -v python3 >/dev/null 2>&1; then
     python3 - "$@"
   else
     uv run --project "$INSTALL_DIR" --frozen --no-sync python - "$@"
@@ -44,35 +64,91 @@ PY
 ensure_hooks_enabled() {
   run_python "$1" <<'PY'
 from pathlib import Path
+import os
 import re
+import shutil
 import sys
 
+try:  # 3.11+
+    import tomllib
+except ImportError:  # pragma: no cover - older interpreters, or no tomli
+    try:
+        import tomli as tomllib
+    except ImportError:
+        tomllib = None
+
 path = Path(sys.argv[1])
+
+
+def commit(new_text):
+    """Back the original up once, then swap the new text in atomically."""
+    backup = path.with_name(path.name + ".bak")
+    if path.exists() and not backup.exists():
+        shutil.copy2(path, backup)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(new_text)
+    os.replace(tmp, path)
+
+
 if not path.exists():
-    path.write_text("[features]\nhooks = true\n")
+    commit("[features]\nhooks = true\n")
     raise SystemExit
 
 text = path.read_text()
 
-features_match = re.search(r"(?m)^\[features\]\s*$", text)
-if features_match:
-    next_section = re.search(r"(?m)^\[[^]]+\]\s*$", text[features_match.end():])
+# A dotted key is checked first: TOML forbids declaring a table twice, so once
+# `features.x = ...` exists at top level, appending `[features]` makes the file
+# invalid. Appending a bare dotted key at EOF is just as wrong — it would land
+# in whatever table happens to be last.
+#
+# Only the region before the first table header is top level: the same
+# `features.hooks = false` under `[profiles.dev]` is that profile's flag, and
+# rewriting it there would leave Codex's own flag untouched.
+first_header = re.search(r"(?m)^[ \t]*\[", text)
+top = text if first_header is None else text[:first_header.start()]
+
+dotted_hooks = re.search(r"(?m)^[ \t]*features\.hooks[ \t]*=.*$", top)
+# Tolerant header match: `[features]` may carry indentation and a comment.  A
+# header declares the table wherever it sits, so this one searches the whole file.
+features_match = None if dotted_hooks else re.search(r"(?m)^[ \t]*\[features\][ \t]*(?:#.*)?$", text)
+
+if dotted_hooks:
+    # Spliced by span — a substitution over `text` would reach into the tables below.
+    text = text[:dotted_hooks.start()] + "features.hooks = true" + text[dotted_hooks.end():]
+elif features_match:
+    next_section = re.search(r"(?m)^[ \t]*\[[^]]+\]", text[features_match.end():])
     block_end = len(text) if next_section is None else features_match.end() + next_section.start()
     block = text[features_match.end():block_end]
-    block = re.sub(r"(?m)^codex_hooks\s*=.*\n?", "", block)
-    if re.search(r"(?m)^hooks\s*=", block):
-        block = re.sub(r"(?m)^hooks\s*=.*$", "hooks = true", block)
+    # Indentation-tolerant like the header above: an indented `hooks = false` that
+    # reads as absent gets a second `hooks` key beside it, which is invalid TOML.
+    block = re.sub(r"(?m)^[ \t]*codex_hooks[ \t]*=.*\n?", "", block)
+    if re.search(r"(?m)^[ \t]*hooks[ \t]*=", block):
+        block = re.sub(r"(?m)^[ \t]*hooks[ \t]*=.*$", "hooks = true", block)
     else:
         if block and not block.startswith("\n"):
             block = "\n" + block
         block = "\nhooks = true" + block
     text = text[:features_match.end()] + block + text[block_end:]
 else:
-    if text and not text.endswith("\n"):
-        text += "\n"
-    text += "\n[features]\nhooks = true\n"
+    # `top` again: a sibling line only belongs next to a key that is top level too.
+    dotted_other = list(re.finditer(r"(?m)^[ \t]*features\.[A-Za-z0-9_-]+[ \t]*=.*$", top))
+    if dotted_other:
+        last = dotted_other[-1]  # an offset into a prefix of `text`, so it indexes `text` as well
+        text = text[:last.end()] + "\nfeatures.hooks = true" + text[last.end():]
+    else:
+        if text and not text.endswith("\n"):
+            text += "\n"
+        text += "\n[features]\nhooks = true\n"
 
-path.write_text(text)
+# Last line of defence: never hand Codex a config it can no longer parse.
+if tomllib is not None:
+    try:
+        tomllib.loads(text)
+    except Exception as exc:
+        sys.stderr.write(f"  ! {path} left untouched: the edit would not be valid TOML ({exc})\n")
+        raise SystemExit(1)
+
+commit(text)
 PY
 }
 
@@ -130,10 +206,20 @@ def load_existing():
     return {"hooks": {}}
 
 
+def ours(command, script_name):
+    """Two markers: the upstream layout, and this plugin's layout at any checkout
+    path (so a moved or renamed clone leaves no duplicate behind). The second one
+    is a bare `/hooks/<script>`, which any third-party tool may also match, so it
+    additionally requires our trailing platform argument — every entry we have
+    ever written, quoted or not, ends with " codex"."""
+    if not isinstance(command, str):
+        return False
+    if f"plugins/codex/hooks/{script_name}" in command:
+        return True
+    return f"/hooks/{script_name}" in command and command.rstrip().endswith(" codex")
+
+
 def strip_old_memsearch_mini(entries, script_name):
-    # Two markers: the upstream layout, and this plugin's layout at any
-    # checkout path (so a moved or renamed clone leaves no duplicate behind).
-    markers = (f"plugins/codex/hooks/{script_name}", f"/hooks/{script_name}")
     cleaned = []
     for entry in entries:
         if not isinstance(entry, dict):
@@ -141,7 +227,7 @@ def strip_old_memsearch_mini(entries, script_name):
         hooks = []
         for hook in entry.get("hooks", []):
             command = hook.get("command", "") if isinstance(hook, dict) else ""
-            if any(marker in command for marker in markers):
+            if ours(command, script_name):
                 continue
             hooks.append(hook)
         if hooks:
@@ -163,7 +249,9 @@ for event, details in spec.items():
             "hooks": [
                 {
                     "type": "command",
-                    "command": f"bash {install_dir}/hooks/{script} codex",
+                    # Quoted: the command is a shell string, and a checkout path
+                    # with a space in it would otherwise be split into two words.
+                    "command": f'bash "{install_dir}/hooks/{script}" codex',
                     "timeout": details["timeout"],
                 }
             ],
@@ -199,24 +287,41 @@ fi
 
 echo "[3/5] Installing the memory-recall skill..."
 mkdir -p "$HOME/.agents/skills"
-if [ -d "$SKILL_DST" ] || [ -L "$SKILL_DST" ]; then
+# Substitute on a sibling temp and swap it in: an abort mid-install can then
+# never leave a half-substituted skill, and a failure here leaves whatever
+# skill is already installed exactly as it was.
+SKILL_TMP="$SKILL_DST.tmp.$$"
+rm -rf "$SKILL_DST".tmp.*
+cp -r "$SKILL_SRC" "$SKILL_TMP"
+replace_text_in_file "$SKILL_TMP/SKILL.md" "__INSTALL_DIR__" "$INSTALL_DIR"
+if [ -e "$SKILL_DST" ] || [ -L "$SKILL_DST" ]; then
   echo "  ⚠ Existing memory-recall skill found — replacing"
   rm -rf "$SKILL_DST"
 fi
-cp -r "$SKILL_SRC" "$SKILL_DST"
-replace_text_in_file "$SKILL_DST/SKILL.md" "__INSTALL_DIR__" "$INSTALL_DIR"
+mv "$SKILL_TMP" "$SKILL_DST"
 echo "  ✓ Installed $SKILL_DST"
 
 echo "[4/5] Configuring hooks..."
 mkdir -p "$CODEX_DIR"
 if [ -f "$HOOKS_FILE" ]; then
-  cp "$HOOKS_FILE" "$HOOKS_FILE.bak"
-  echo "  ⚠ Existing hooks.json backed up to $HOOKS_FILE.bak"
+  # Only the pristine, pre-plugin file is worth keeping: a reinstall must not
+  # overwrite it with output this installer wrote itself.
+  if [ -e "$HOOKS_FILE.bak" ]; then
+    echo "  · Existing backup kept as it is: $HOOKS_FILE.bak"
+  else
+    cp "$HOOKS_FILE" "$HOOKS_FILE.bak"
+    echo "  ⚠ Existing hooks.json backed up to $HOOKS_FILE.bak"
+  fi
 fi
 install_or_update_hooks_file "$HOOKS_FILE" "$INSTALL_DIR"
 echo "  ✓ memsearch-mini hook entries written to $HOOKS_FILE"
-ensure_hooks_enabled "$CONFIG_FILE"
-echo "  ✓ hooks = true under [features] in $CONFIG_FILE"
+# `if` so `set -e` does not abort the install: a config this edit refuses to
+# touch is a warning, not a reason to leave the hooks half-wired.
+if ensure_hooks_enabled "$CONFIG_FILE"; then
+  echo "  ✓ hooks = true under [features] in $CONFIG_FILE"
+else
+  echo "  ⚠ $CONFIG_FILE left untouched — set hooks = true under [features] by hand"
+fi
 
 echo "[5/5] Setting permissions..."
 if chmod +x "$INSTALL_DIR/bin/memsearch-mini" "$INSTALL_DIR/hooks/"*.sh "$INSTALL_DIR/codex/install.sh" 2>/dev/null; then

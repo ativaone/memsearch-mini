@@ -42,8 +42,11 @@ def _maybe_add(path: Path, extensions: tuple[str, ...], seen: set[str], results:
     resolved = str(path.resolve())
     if path.suffix.lower() not in extensions or resolved in seen:
         return
+    try:
+        stat = path.stat()
+    except OSError:
+        return  # a dangling symlink, or a file deleted mid-walk: skip it, never abort the scan
     seen.add(resolved)
-    stat = path.stat()
     results.append(ScannedFile(path=path, mtime=stat.st_mtime, size=stat.st_size))
 
 

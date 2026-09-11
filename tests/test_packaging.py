@@ -136,6 +136,17 @@ def test_scripts_are_executable(relative: str) -> None:
     assert os.access(path, os.X_OK), f"{relative} is missing its executable bit"
 
 
+def test_shell_entry_points_are_lf_only() -> None:
+    """A CRLF clone makes every launcher unrunnable: `bash\\r: no such file`."""
+    attributes = (REPO / ".gitattributes").read_text(encoding="utf-8")
+    assert "*.sh text eol=lf" in attributes
+    # bin/memsearch-mini has no .sh suffix, so the glob above never covered it.
+    assert "bin/memsearch-mini text eol=lf" in attributes
+
+    for path in [REPO / "bin" / "memsearch-mini", *sorted((REPO / "hooks").glob("*.sh"))]:
+        assert b"\r\n" not in path.read_bytes(), f"{path.name} has CRLF line endings"
+
+
 def test_common_sh_is_a_library_no_host_ever_executes() -> None:
     """common.sh is sourced, never run: no hook command may point at it."""
     commands = [

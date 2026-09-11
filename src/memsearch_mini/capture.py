@@ -89,7 +89,7 @@ def _claude_texts(obj: dict, *, plain: bool) -> list[str]:
     content = message.get("content") if isinstance(message, dict) else None
     clean = strip_harness_tags if plain else str.strip  # user entries carry harness-injected blocks
     if isinstance(content, str):
-        return [clean(content)] if plain and clean(content) else []
+        return [clean(content)] if clean(content) else []  # *plain* picks the cleaner, not the branch
     if not isinstance(content, list):
         return []
     blocks = [b.get("text") or "" for b in content if isinstance(b, dict) and b.get("type") == "text"]

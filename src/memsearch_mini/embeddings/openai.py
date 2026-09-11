@@ -62,7 +62,11 @@ class OpenAIEmbedding:
 
     async def _embed_batch(self, texts: list[str]) -> list[list[float]]:
         resp = await self._client.embeddings.create(input=texts, model=self._model, encoding_format="float")
-        return [item.embedding for item in resp.data]
+        # The API numbers each item instead of promising order, and a compatible
+        # server behind OPENAI_BASE_URL may use that freedom; a misordered batch
+        # would silently attach every embedding to the wrong chunk.  The SDK builds
+        # response models leniently, so a missing index falls back to the wire order.
+        return [item.embedding for item in sorted(resp.data, key=lambda item: getattr(item, "index", None) or 0)]
 
 
 _KNOWN_DIMENSIONS: dict[str, int] = {

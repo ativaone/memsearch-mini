@@ -1,6 +1,6 @@
 """Tests for the markdown chunker."""
 
-from memsearch_mini.chunker import chunk_markdown, clean_content_for_embedding
+from memsearch_mini.chunker import _split_long_text, chunk_markdown, clean_content_for_embedding
 
 
 def test_simple_heading_split():
@@ -251,6 +251,13 @@ def test_long_cjk_text_splits_on_fullwidth_semicolon() -> None:
     assert len(chunks) > 1
     assert all(len(chunk.content) <= 24 for chunk in chunks)
     assert all(chunk.content.endswith(semicolon) for chunk in chunks[:-1])
+
+
+def test_non_positive_max_size_still_terminates() -> None:
+    """A hard split of 0 characters would loop forever, and the indexer holds the lock."""
+    assert _split_long_text("abcdef", 0) == list("abcdef")
+    assert _split_long_text("abcdef", -5) == list("abcdef")
+    assert _split_long_text("", 0) == []
 
 
 # --- min_chunk_size (upstream #609) ------------------------------------------

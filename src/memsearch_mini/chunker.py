@@ -263,6 +263,7 @@ def _split_long_text(text: str, max_size: int) -> list[str]:
 
     Prefers splitting at sentence boundaries; falls back to character position.
     """
+    max_size = max(1, max_size)  # a non-positive size would make the hard split loop forever
     parts: list[str] = []
     while len(text) > max_size:
         # Look for the last sentence boundary within max_size

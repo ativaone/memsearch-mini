@@ -267,6 +267,10 @@ def _pending_claim(path: Path) -> Path | None:
         path.rename(target)
     except OSError:
         return None
+    # rename() keeps the record's mtime: without this the claim of an old record is stale the
+    # instant it is made, and the next recovery worker journals the same turn a second time.
+    with contextlib.suppress(OSError):
+        os.utime(target)
     return target
 
 

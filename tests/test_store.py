@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -329,6 +330,108 @@ def test_reopening_with_fts_backfills_a_database_indexed_without_it(tmp_path, mo
         assert [hit.chunk_id for hit in reopened.search([], "unique")] == ["c1"]
 
 
+def test_reopening_with_fts_reconciles_rows_a_no_fts_run_never_wrote(tmp_path, monkeypatch):
+    """An existing table is reconciled, not just probed: NO_FTS=1 desyncs it permanently."""
+    path = tmp_path / "index.db"
+    with _open(path, allow_rebuild=True) as opened:
+        opened.upsert([_rec("c1", E0, content="alpha")])
+
+    monkeypatch.setenv("MEMSEARCH_MINI_NO_FTS", "1")
+    with _open(path) as blind:
+        assert blind.fts_enabled is False
+        blind.upsert([_rec("c2", E1, content="beta unique")])
+
+    monkeypatch.delenv("MEMSEARCH_MINI_NO_FTS")
+    with Store.open(path) as reopened:
+        assert _fts_rowids(reopened) == _chunk_rowids(reopened)
+        assert [hit.chunk_id for hit in reopened.search([], "unique")] == ["c2"]
+
+
+def test_reset_without_fts_leaves_no_row_behind_to_shadow_a_later_chunk(tmp_path, monkeypatch):
+    path = tmp_path / "index.db"
+    with _open(path, allow_rebuild=True) as opened:
+        opened.upsert([_rec("c1", E0, content="alpha"), _rec("c2", E1, content="beta")])
+
+    monkeypatch.setenv("MEMSEARCH_MINI_NO_FTS", "1")
+    with _open(path) as blind:
+        blind.reset()
+        blind.upsert([_rec("c3", E2, content="gamma unique")])
+
+    monkeypatch.delenv("MEMSEARCH_MINI_NO_FTS")
+    with Store.open(path) as reopened:
+        assert _fts_rowids(reopened) == _chunk_rowids(reopened)
+        assert [hit.chunk_id for hit in reopened.search([], "unique")] == ["c3"]
+        assert reopened.search([], "alpha") == []  # the emptied rows must not answer for c3
+
+
+def test_deleting_without_fts_leaves_no_row_behind_to_shadow_a_later_chunk(tmp_path, monkeypatch):
+    path = tmp_path / "index.db"
+    with _open(path, allow_rebuild=True) as opened:
+        opened.upsert([_rec("c1", E0, content="alpha")])
+
+    monkeypatch.setenv("MEMSEARCH_MINI_NO_FTS", "1")
+    with _open(path) as blind:
+        assert blind.delete_chunk_ids(["c1"]) == 1
+        blind.upsert([_rec("c2", E1, content="beta unique")])
+
+    monkeypatch.delenv("MEMSEARCH_MINI_NO_FTS")
+    with Store.open(path) as reopened:
+        assert _fts_rowids(reopened) == _chunk_rowids(reopened)
+        assert [hit.chunk_id for hit in reopened.search([], "unique")] == ["c2"]
+        assert reopened.search([], "alpha") == []
+
+
+def _drifted(path: Path, monkeypatch) -> None:
+    """One chunk with its keyword row, one written blind: the two tables now disagree."""
+    with _open(path, allow_rebuild=True) as opened:
+        opened.upsert([_rec("c1", E0, content="alpha")])
+
+    monkeypatch.setenv("MEMSEARCH_MINI_NO_FTS", "1")
+    with _open(path) as blind:
+        blind.upsert([_rec("c2", E1, content="beta unique")])
+    monkeypatch.delenv("MEMSEARCH_MINI_NO_FTS")
+
+
+class _LosesTheRace(Store):
+    """The second opener of a drifted index: another process repairs the very same
+    drift between this one's unlocked probe and its own BEGIN IMMEDIATE."""
+
+    raced = False
+
+    @contextmanager
+    def _write(self):
+        if not self.raced:
+            self.raced = True
+            Store.open(self.path).close()  # the winner, under its own write lock
+        with super()._write() as conn:
+            yield conn
+
+
+def test_a_drift_another_process_repaired_first_is_a_no_op(tmp_path, monkeypatch):
+    path = tmp_path / "index.db"
+    _drifted(path, monkeypatch)
+    loser = _LosesTheRace(sqlite3.connect(str(path), timeout=10.0, isolation_level=None), path)
+
+    with loser:  # re-inserting a live rowid would raise sqlite3.IntegrityError
+        assert loser._resolve_fts() is True
+        assert loser.raced  # the repair path really ran
+        assert _fts_rowids(loser) == _chunk_rowids(loser)
+
+
+def test_a_drifted_index_on_a_read_only_file_still_opens_and_searches(tmp_path, monkeypatch):
+    """Nothing can repair a read-only copy; the keyword rows it has stay usable."""
+    path = tmp_path / "index.db"
+    _drifted(path, monkeypatch)
+    path.chmod(0o444)
+    try:
+        with Store.open(path) as reader:
+            assert reader.fts_enabled is True
+            assert [hit.chunk_id for hit in reader.search([], "alpha")] == ["c1"]
+            assert [hit.chunk_id for hit in reader.search(E1, "", top_k=1)] == ["c2"]
+    finally:
+        path.chmod(0o644)  # the drift heals the next time a writer opens it
+
+
 def test_creating_the_fts_table_without_fts5_is_reported_clearly(tmp_path):
     with pytest.raises(StoreError, match="MEMSEARCH_MINI_NO_FTS=1"):
         _detached(tmp_path)._resolve_fts()
@@ -342,6 +445,38 @@ def test_probing_an_existing_fts_table_without_fts5_is_reported_clearly(tmp_path
 def test_other_sqlite_errors_from_the_fts_table_are_not_swallowed(tmp_path):
     with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
         _detached(tmp_path, "disk I/O error")._resolve_fts()
+
+
+class _FlakyCommit:
+    """A connection whose first COMMIT fails, as a busy database's would."""
+
+    def __init__(self, conn: sqlite3.Connection, failures: int = 1) -> None:
+        self._conn = conn
+        self.failures = failures
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
+
+    def commit(self) -> None:
+        if self.failures:
+            self.failures -= 1
+            raise sqlite3.OperationalError("database is locked")
+        self._conn.commit()
+
+
+def test_a_failed_commit_rolls_back_instead_of_stranding_the_transaction(tmp_path):
+    path = tmp_path / "index.db"
+    with _open(path, allow_rebuild=True) as opened:
+        opened._conn = flaky = _FlakyCommit(opened._conn)
+
+        with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+            opened.upsert([_rec("c1", E0, content="alpha")])
+
+        assert flaky.in_transaction is False  # the next write must be able to BEGIN
+        assert opened.upsert([_rec("c2", E1, content="beta")]) == 1
+
+    with Store.open(path) as reader:
+        assert [hit.chunk_id for hit in reader.search(E1, "beta")] == ["c2"]
 
 
 def test_the_matrix_cache_notices_writes_from_another_connection(tmp_path):

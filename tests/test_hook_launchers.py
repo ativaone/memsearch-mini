@@ -349,7 +349,14 @@ def test_user_prompt_submit_prints_hint_without_touching_python(plugin: Plugin) 
     result = plugin.run("user-prompt-submit.sh", "claude", stdin='{"prompt": "hi"}')
 
     assert result.returncode == 0
-    assert json.loads(result.stdout)["systemMessage"] == RECALL_HINT
+    # additionalContext is the model-facing channel; systemMessage only reaches
+    # the UI, so a hint sent there never tells the model recall exists.
+    payload = json.loads(result.stdout)
+    assert payload["hookSpecificOutput"] == {
+        "hookEventName": "UserPromptSubmit",
+        "additionalContext": RECALL_HINT,
+    }
+    assert "systemMessage" not in payload
     assert plugin.uv_calls() == []
     assert plugin.cli_calls() == []
 
@@ -577,6 +584,28 @@ def test_prepare_log_is_silent_before_the_log_exists(plugin: Plugin) -> None:
     assert result.stderr == ""
 
 
+def test_a_relative_uv_project_environment_never_litters_the_hook_cwd(plugin: Plugin, tmp_path: Path) -> None:
+    """uv resolves a relative UV_PROJECT_ENVIRONMENT against the project root, not
+    the cwd; the venv's bookkeeping siblings have to follow it there."""
+    workdir = tmp_path / "some-project"
+    workdir.mkdir()
+
+    result = subprocess.run(
+        ["bash", str(plugin.root / "hooks" / "session-start.sh"), "claude"],
+        input="{}",
+        capture_output=True,
+        text=True,
+        env={**plugin.env, "UV_PROJECT_ENVIRONMENT": "relenv"},
+        cwd=str(workdir),
+        timeout=20,
+    )
+
+    assert result.returncode == 0
+    # Whichever way it went, the detached child has written its bookkeeping by now.
+    plugin.wait_for(lambda: (plugin.root / "relenv.root").exists() or any(workdir.iterdir()), timeout=10)
+    assert sorted(path.name for path in workdir.iterdir()) == []
+
+
 def test_extras_args_defaults_to_onnx_only(plugin: Plugin) -> None:
     result = plugin.bash("extras_args")
 
@@ -631,6 +660,27 @@ def test_bin_memsearch_mini_syncs_when_the_runtime_is_missing(plugin: Plugin) ->
     assert result.returncode == 0
     assert len(plugin.sync_calls()) == 1
     assert plugin.cli_calls() == ["search foo -k 5 --json"]
+
+
+def test_bin_memsearch_mini_hook_never_blocks_on_a_sync(plugin: Plugin) -> None:
+    """A hook has seconds; a sync has minutes. Losing the turn is the policy."""
+    started = time.time()
+    result = subprocess.run(
+        ["bash", str(plugin.root / "bin" / "memsearch-mini"), "hook", "stop", "--platform", "claude"],
+        input="{}",
+        capture_output=True,
+        text=True,
+        env={**plugin.env, "FAKE_SYNC_SLEEP": "5"},
+        cwd=str(plugin.root),
+        timeout=30,
+    )
+    elapsed = time.time() - started
+
+    assert result.returncode == 0
+    assert result.stdout == "{}\n"
+    assert elapsed < 5
+    assert plugin.sync_calls() == []
+    assert plugin.cli_calls() == []
 
 
 def test_bin_memsearch_mini_sync_flag_is_blocking(plugin: Plugin) -> None:

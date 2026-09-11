@@ -22,16 +22,26 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 
+# The `run` branch also copies the one uv behaviour the uninstaller has to
+# defend against: with no UV_PROJECT_ENVIRONMENT, uv builds <project>/.venv.
 FAKE_UV = r"""#!/usr/bin/env bash
 set -u
 printf '%s\n' "$*" >> "$FAKE_UV_LOG"
 case "${1:-}" in
   run)
     shift
+    project=""
     while [ $# -gt 0 ]; do
       case "$1" in
-        python|python3) shift; exec "$FAKE_PYTHON" "$@" ;;
-        --project|--extra|--python) shift 2 ;;
+        --project) project="$2"; shift 2 ;;
+        python|python3)
+          if [ -z "${UV_PROJECT_ENVIRONMENT:-}" ] && [ -n "$project" ]; then
+            mkdir -p "$project/.venv"
+          fi
+          shift
+          exec "$FAKE_PYTHON" "$@"
+          ;;
+        --extra|--python) shift 2 ;;
         *) shift ;;
       esac
     done
@@ -42,7 +52,9 @@ exit 0
 """
 
 # Everything uninstall.sh shells out to, so a PATH can be built without python3.
-CORE_TOOLS = ("bash", "dirname", "rm", "grep", "du", "cut", "cat", "ls")
+# `mkdir` is not one of them: the fake uv above needs it to emulate uv building
+# an environment, and a PATH without it would hide that emulation.
+CORE_TOOLS = ("bash", "dirname", "rm", "grep", "du", "cut", "cat", "ls", "mkdir")
 
 
 @dataclass
@@ -209,6 +221,46 @@ def test_removes_entries_from_a_moved_checkout(uninstaller: Uninstaller) -> None
     assert uninstaller.hooks() == {"hooks": {}}
 
 
+def test_a_third_party_hook_named_like_ours_is_never_removed(uninstaller: Uninstaller) -> None:
+    """`/hooks/stop.sh` is a substring, not an identity: only our own entries go."""
+    foreign = "bash /home/u/.config/othertool/hooks/stop.sh"
+    uninstaller.write_hooks(
+        {
+            "hooks": {
+                "Stop": [
+                    {"matcher": "", "hooks": [{"type": "command", "command": foreign}]},
+                    uninstaller.our_entry("stop.sh"),
+                ]
+            }
+        }
+    )
+
+    result = uninstaller.run()
+
+    assert result.returncode == 0
+    assert uninstaller.commands("Stop") == [foreign]
+
+
+def test_removes_the_quoted_command_format(uninstaller: Uninstaller) -> None:
+    """Installs from a path with spaces write the command with the path quoted."""
+    uninstaller.write_hooks(
+        {
+            "hooks": {
+                "Stop": [
+                    {
+                        "matcher": "",
+                        "hooks": [{"type": "command", "command": 'bash "/some check out/hooks/stop.sh" codex'}],
+                    }
+                ]
+            }
+        }
+    )
+
+    uninstaller.run()
+
+    assert uninstaller.hooks() == {"hooks": {}}
+
+
 def test_legacy_array_format_keeps_foreign_items(uninstaller: Uninstaller) -> None:
     uninstaller.write_hooks(
         [
@@ -334,17 +386,23 @@ def test_unknown_argument_is_rejected(uninstaller: Uninstaller) -> None:
     assert "usage:" in result.stderr
 
 
-def test_hook_removal_falls_back_to_uv_run_python(uninstaller: Uninstaller, tmp_path: Path) -> None:
-    """No system python3: the JSON edit goes through the interpreter uv manages."""
+def _slim_bin(uninstaller: Uninstaller, tmp_path: Path) -> Path:
+    """A PATH with the uninstaller's core tools and uv, but no python3."""
     slim = tmp_path / "slimbin"
-    slim.mkdir()
+    slim.mkdir(exist_ok=True)
     for tool in CORE_TOOLS:
         found = shutil.which(tool)
-        if found:
+        if found and not (slim / tool).exists():
             (slim / tool).symlink_to(found)
     shutil.copy2(Path(uninstaller.env["PATH"].split(":")[0]) / "uv", slim / "uv")
     (slim / "uv").chmod(0o755)
     assert shutil.which("python3", path=str(slim)) is None
+    return slim
+
+
+def test_hook_removal_falls_back_to_uv_run_python(uninstaller: Uninstaller, tmp_path: Path) -> None:
+    """No system python3: the JSON edit goes through the interpreter uv manages."""
+    slim = _slim_bin(uninstaller, tmp_path)
     uninstaller.write_hooks({"hooks": {"Stop": [uninstaller.our_entry("stop.sh")]}})
 
     result = uninstaller.run(extra_env={"PATH": str(slim)})
@@ -353,3 +411,16 @@ def test_hook_removal_falls_back_to_uv_run_python(uninstaller: Uninstaller, tmp_
     assert uninstaller.hooks() == {"hooks": {}}
     uv_log = Path(uninstaller.env["FAKE_UV_LOG"]).read_text(encoding="utf-8")
     assert "run " in uv_log
+
+
+def test_uninstall_never_builds_an_environment_inside_the_checkout(uninstaller: Uninstaller, tmp_path: Path) -> None:
+    """The uv fallback must not leave a .venv behind in the very checkout being retired."""
+    slim = _slim_bin(uninstaller, tmp_path)
+    uninstaller.write_hooks({"hooks": {"Stop": [uninstaller.our_entry("stop.sh")]}})
+    before = {str(path.relative_to(uninstaller.root)) for path in uninstaller.root.rglob("*")}
+
+    result = uninstaller.run(extra_env={"PATH": str(slim)})
+
+    assert result.returncode == 0
+    assert not (uninstaller.root / ".venv").exists()
+    assert {str(path.relative_to(uninstaller.root)) for path in uninstaller.root.rglob("*")} == before

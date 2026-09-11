@@ -170,6 +170,21 @@ def test_claude_array_content_user_message(tmp_path):
     assert turn.turn_uuid == "u-9"
 
 
+def test_claude_assistant_plain_string_content_is_kept(tmp_path):
+    """Some hosts write message.content as a bare string; that reply is still the answer."""
+    path = _jsonl(
+        tmp_path / "s.jsonl",
+        [
+            {"type": "user", "uuid": "u-1", "message": {"content": "PLAIN_QUESTION"}},
+            {"type": "assistant", "message": {"content": "  PLAIN_STRING_ANSWER  "}},
+        ],
+    )
+
+    turn = capture.extract_last_turn(path, "claude")
+
+    assert "[Claude Code]: PLAIN_STRING_ANSWER" in turn.text
+
+
 def test_claude_survives_malformed_entries(tmp_path):
     path = _jsonl(
         tmp_path / "weird.jsonl",

@@ -151,6 +151,22 @@ def test_coerce_rejects_a_non_boolean_and_a_non_integer():
         coerce("batch_size", "many")
 
 
+@pytest.mark.parametrize(
+    ("name", "raw"),
+    [
+        ("max_chunk_size", "0"),
+        ("max_chunk_size", "-1"),
+        ("overlap_lines", "-1"),
+        ("min_chunk_size", "-2"),
+        ("batch_size", "-1"),
+    ],
+)
+def test_coerce_rejects_integers_below_their_floor(name, raw):
+    """A max_chunk_size of 0 would spin the indexer forever, holding the index lock."""
+    with pytest.raises(ValueError, match="Expected an integer"):
+        coerce(name, raw)
+
+
 def test_set_value_persists_the_coerced_value(tmp_path):
     path = tmp_path / "config.toml"
     assert set_value("chunking.max_chunk_size", "900", path) == 900
@@ -168,11 +184,29 @@ def test_set_value_persists_the_coerced_value(tmp_path):
     assert cfg.chunking.overlap_lines == 2  # other defaults are not written out
 
 
+def test_set_value_rejects_an_unusable_integer_before_touching_the_file(tmp_path):
+    path = tmp_path / "config.toml"
+    with pytest.raises(ValueError, match="Expected an integer"):
+        set_value("chunking.max_chunk_size", "0", path)
+    assert not path.exists()
+
+
 def test_set_value_rejects_an_unknown_key_before_touching_the_file(tmp_path):
     path = tmp_path / "config.toml"
     with pytest.raises(KeyError):
         set_value("milvus.uri", "http://x", path)
     assert not path.exists()
+
+
+def test_set_value_reports_a_scalar_where_a_section_belongs(tmp_path):
+    """A hand-edited ``embedding = 5`` must not become a TypeError, nor be silently replaced."""
+    path = tmp_path / "config.toml"
+    path.write_text("embedding = 5\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="embedding"):
+        set_value("embedding.provider", "onnx", path)
+
+    assert path.read_text(encoding="utf-8") == "embedding = 5\n"
 
 
 def test_set_value_uses_the_environment_path_when_none_is_given(tmp_path, monkeypatch):

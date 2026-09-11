@@ -9,6 +9,17 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 MEMSEARCH_MINI_HOME="${MEMSEARCH_MINI_HOME:-$HOME/.memsearch-mini}"
+# The `uv run` fallback in run_python must never build an environment inside the
+# checkout being retired: without UV_PROJECT_ENVIRONMENT uv creates $ROOT/.venv.
+# Ask the library for the same path the hooks use; a subshell keeps a sourcing
+# failure from taking this script down, and a value the user set still wins.
+VENV="$(bash -c 'source "$1/hooks/common.sh"; printf "%s\n" "$VENV"' _ "$ROOT" 2>/dev/null || true)"
+if [ -n "$VENV" ]; then
+  export UV_PROJECT_ENVIRONMENT="$VENV"
+fi
+UV_CACHE_DIR="${UV_CACHE_DIR:-$MEMSEARCH_MINI_HOME/uv-cache}"
+UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-$MEMSEARCH_MINI_HOME/python}"
+export UV_CACHE_DIR UV_PYTHON_INSTALL_DIR
 CODEX_HOOKS="$HOME/.codex/hooks.json"
 CODEX_CONFIG="$HOME/.codex/config.toml"
 SKILL_DIR="$HOME/.agents/skills/memory-recall"
@@ -28,8 +39,9 @@ run_python() {
   return $?
 }
 
-# Removes only entries whose command names one of our three hook scripts, by
-# the same two markers install.sh uses: the upstream layout and any checkout.
+# Removes only entries whose command names one of our three hook scripts, by the
+# same two markers install.sh uses: the upstream layout, and any checkout whose
+# command also ends with our " codex" argument.
 strip_codex_hooks() {
   run_python "$1" <<'PY'
 from pathlib import Path
@@ -39,12 +51,21 @@ import sys
 
 path = Path(sys.argv[1])
 scripts = ("session-start.sh", "user-prompt-submit.sh", "stop.sh")
-markers = [f"plugins/codex/hooks/{name}" for name in scripts] + [f"/hooks/{name}" for name in scripts]
 removed = []
 
 
 def ours(command):
-    return isinstance(command, str) and any(marker in command for marker in markers)
+    """The bare `/hooks/<script>` marker matches any third-party tool that names
+    a script the same way, so it additionally requires our trailing platform
+    argument — every entry the installer has ever written ends with " codex"."""
+    if not isinstance(command, str):
+        return False
+    for name in scripts:
+        if f"plugins/codex/hooks/{name}" in command:
+            return True
+        if f"/hooks/{name}" in command and command.rstrip().endswith(" codex"):
+            return True
+    return False
 
 
 try:
@@ -113,6 +134,9 @@ else
   echo "  · no $CODEX_HOOKS — nothing to unwire"
 fi
 echo "  · [features] hooks in $CODEX_CONFIG left as it is: other tools may rely on it"
+for _bak in "$CODEX_HOOKS.bak" "$CODEX_CONFIG.bak"; do
+  [ -f "$_bak" ] && echo "  · pre-plugin backup kept: $_bak — delete it by hand if unwanted"
+done
 
 echo "[2/4] Codex skill..."
 if [ -f "$SKILL_DIR/SKILL.md" ] && grep -q "bin/memsearch-mini" "$SKILL_DIR/SKILL.md" 2>/dev/null; then
