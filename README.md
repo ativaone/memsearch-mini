@@ -139,6 +139,19 @@ is enough. An outer wrapper around the host (bubblewrap) has its own rules: see 
 
 To undo all of this, see [Uninstall](#uninstall).
 
+## Upgrade
+
+Claude Code, from a terminal (or the same two commands as `/plugin …` inside a session):
+
+```bash
+claude plugin marketplace update ativaone
+claude plugin update memsearch-mini@ativaone
+```
+
+The next session syncs the new version's runtime in the background and reclaims the old one by
+itself after its grace period. Codex: `git pull` in the checkout is the whole upgrade — the hooks
+run straight from it; re-run `bash codex/install.sh` only after moving the clone.
+
 ## How it works
 
 ```

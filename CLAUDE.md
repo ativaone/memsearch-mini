@@ -49,7 +49,8 @@ search → expand → transcript. Runtime state lives under `$MEMSEARCH_MINI_HOM
   the plugin root and `marketplace.json` points at `"./"`.
 - **One version, three files:** `pyproject.toml`, `.claude-plugin/plugin.json` and
   `.claude-plugin/marketplace.json` (both `metadata.version` and the plugin entry). Bump them
-  together — `tests/test_packaging.py` fails if they drift.
+  together — `tests/test_packaging.py` fails if they drift. `uv.lock`'s own `memsearch-mini`
+  entry follows along; no test guards that one.
 - **A launcher prints exactly one JSON object and exits 0.** No `set -e` anywhere in the plugin
   shell, and every function ends with an explicit `return`.
 - **Every detached child redirects all three fds** (`</dev/null >>"$LOG" 2>&1 &` in bash;
@@ -65,3 +66,7 @@ search → expand → transcript. Runtime state lives under `$MEMSEARCH_MINI_HOM
   `.claude/upstream-sync/`. Never merge or cherry-pick from upstream.
 - **Hooks stay import-light.** No `numpy`, `onnxruntime` or `memsearch_mini.store` at module scope in
   `hooks.py` — a SessionStart that pays for an ONNX import blows its 10-second budget.
+- **"Pode dar push" authorizes the whole delivery cycle.** When Edgar authorizes a push after bug
+  fixes, improvements or evolutions, that covers — without asking again — one GitHub issue per item
+  (symptom, root cause, fix, tests), the version bump, staging exactly what gets committed, the
+  push, and closing each issue with a comment naming the commit.
