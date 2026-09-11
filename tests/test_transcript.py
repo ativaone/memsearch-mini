@@ -190,6 +190,56 @@ def test_user_authored_tags_are_kept(tmp_path: Path) -> None:
     assert tr.parse_transcript(p)[0].text == "<demanda>keep this</demanda> please"
 
 
+# --- injected entries: skill bodies and subagent traffic ---------------------
+
+
+def test_meta_user_entry_is_not_a_user_turn(tmp_path: Path) -> None:
+    """A skill body loaded through the Skill tool is recorded as an isMeta user entry."""
+    rows = [
+        {
+            "type": "user",
+            "isMeta": True,
+            "uuid": "m1",
+            "message": {"content": [{"type": "text", "text": "SKILL_BODY"}]},
+        },
+        _user("real question", "u2"),
+    ]
+    p = _write(tmp_path / "c.jsonl", rows)
+
+    turns = tr.parse_transcript(p)
+
+    assert [(t.uuid, t.text) for t in turns] == [("u2", "real question")]
+    assert "SKILL_BODY" not in tr.format_turns(turns)
+
+
+def test_sidechain_traffic_is_dropped_for_both_roles(tmp_path: Path) -> None:
+    """Subagent entries are the agent talking to itself, not the conversation being recalled."""
+    rows = [
+        _user("real question", "u1"),
+        {"type": "user", "isSidechain": True, "uuid": "s1", "message": {"content": "SIDECHAIN_USER"}},
+        {
+            "type": "assistant",
+            "isSidechain": True,
+            "uuid": "s2",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "SIDECHAIN_ASSISTANT"},
+                    {"type": "tool_use", "id": "t9", "name": "Bash", "input": {"command": "SIDECHAIN_COMMAND"}},
+                ]
+            },
+        },
+        {"type": "assistant", "uuid": "a1", "message": {"content": [{"type": "text", "text": "real answer"}]}},
+    ]
+    p = _write(tmp_path / "c.jsonl", rows)
+
+    turns = tr.parse_transcript(p)
+    rendered = tr.format_turns(turns)
+
+    assert [(t.uuid, t.text) for t in turns] == [("u1", "real question"), ("a1", "real answer")]
+    for noise in ("SIDECHAIN_USER", "SIDECHAIN_ASSISTANT", "SIDECHAIN_COMMAND"):
+        assert noise not in rendered
+
+
 def test_malformed_bytes_degrade_instead_of_raising(tmp_path: Path) -> None:
     """A host that appends a non-UTF-8 byte must not make the L3 recall step traceback."""
     p = tmp_path / "bad.jsonl"

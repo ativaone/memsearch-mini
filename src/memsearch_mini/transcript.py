@@ -121,6 +121,10 @@ def _parse_claude(entries: list[dict[str, Any]]) -> list[Turn]:
     pending: dict[str, ToolCall] = {}  # tool_use_id -> ToolCall (awaiting result)
     for entry in entries:
         etype = entry.get("type")
+        # Subagent traffic (isSidechain, both roles) and harness-injected user entries such as
+        # skill bodies (isMeta) are written as ordinary entries but are nobody's words here.
+        if entry.get("isSidechain") or (etype == "user" and entry.get("isMeta")):
+            continue
         msg = entry.get("message", {}) if isinstance(entry.get("message"), dict) else {}
         content = msg.get("content", "")
         if etype == "user":

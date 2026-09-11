@@ -97,7 +97,13 @@ def _claude_texts(obj: dict, *, plain: bool) -> list[str]:
 
 
 def _is_user_turn(obj: dict | None) -> bool:
-    return bool(obj and obj.get("type") == "user" and not obj.get("isMeta") and _claude_texts(obj, plain=True))
+    return bool(
+        obj
+        and obj.get("type") == "user"
+        and not obj.get("isMeta")
+        and not obj.get("isSidechain")
+        and _claude_texts(obj, plain=True)
+    )
 
 
 def _claude_turn(lines: list[str], session_id: str, path: Path | None, turn_uuid: str = "") -> ParsedTurn:
@@ -133,6 +139,10 @@ def _claude_turn(lines: list[str], session_id: str, path: Path | None, turn_uuid
     for raw in lines[start:end]:
         obj = _loads(raw)
         if obj is None or obj.get("type") not in ("user", "assistant"):
+            continue
+        # The harness writes skill bodies (isMeta) and subagent traffic (isSidechain) as
+        # ``type: "user"`` too. Neither is the user speaking, so both are dropped entirely.
+        if obj.get("isMeta") or obj.get("isSidechain"):
             continue
         is_user = obj.get("type") == "user"
         label = "User" if is_user else "Claude Code"

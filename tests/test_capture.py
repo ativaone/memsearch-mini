@@ -101,6 +101,12 @@ def _claude_transcript(path: Path) -> Path:
             "{not valid json",
             {"type": "user", "uuid": "turn-2", "message": {"content": "LAST_TURN_QUESTION"}},
             {
+                "type": "user",
+                "isMeta": True,
+                "uuid": "meta-2",
+                "message": {"content": [{"type": "text", "text": "SKILL_BODY_NOISE"}]},
+            },
+            {
                 "type": "assistant",
                 "message": {
                     "content": [
@@ -111,6 +117,12 @@ def _claude_transcript(path: Path) -> Path:
                 },
             },
             {"type": "user", "message": {"content": [{"type": "tool_result", "content": "TOOL_RESULT_NOISE"}]}},
+            {"type": "user", "isSidechain": True, "uuid": "side-1", "message": {"content": "SIDECHAIN_USER_NOISE"}},
+            {
+                "type": "assistant",
+                "isSidechain": True,
+                "message": {"content": [{"type": "text", "text": "SIDECHAIN_ASSISTANT_NOISE"}]},
+            },
             {"type": "assistant", "message": {"content": [{"type": "text", "text": "FINAL_ANSWER"}]}},
             {"type": "system", "message": {"content": "system noise"}},
         ],
@@ -130,7 +142,17 @@ def test_claude_extracts_only_the_last_turn(tmp_path):
     assert turn.turn_uuid == "turn-2"
     assert turn.session_id == "session-a"
     assert turn.transcript_path == str(tmp_path / "session-a.jsonl")
-    for noise in ("FIRST_TURN", "SECRET_THINKING", "TOOL_COMMAND", "TOOL_RESULT_NOISE", "META_NOISE", "system noise"):
+    for noise in (
+        "FIRST_TURN",
+        "SECRET_THINKING",
+        "TOOL_COMMAND",
+        "TOOL_RESULT_NOISE",
+        "META_NOISE",
+        "SKILL_BODY_NOISE",
+        "SIDECHAIN_USER_NOISE",
+        "SIDECHAIN_ASSISTANT_NOISE",
+        "system noise",
+    ):
         assert noise not in turn.text
 
 
@@ -147,6 +169,32 @@ def test_claude_summarizer_input_excludes_harness_blocks(tmp_path):
     turn = capture.extract_last_turn(_jsonl(tmp_path / "s.jsonl", rows), "claude")
     assert "[User]: qual o status?" in turn.text
     assert "English reminder" not in turn.text and "system-reminder" not in turn.text
+
+
+def test_claude_sidechain_entry_never_starts_a_turn(tmp_path):
+    """Subagent traffic is written as ``type: "user"``; the turn still starts at the real prompt."""
+    path = _jsonl(
+        tmp_path / "s.jsonl",
+        [
+            {"type": "user", "uuid": "u-1", "message": {"content": "REAL_QUESTION"}},
+            {"type": "user", "isSidechain": True, "uuid": "side-1", "message": {"content": "SIDECHAIN_USER_NOISE"}},
+            {
+                "type": "assistant",
+                "isSidechain": True,
+                "message": {"content": [{"type": "text", "text": "SIDECHAIN_ASSISTANT_NOISE"}]},
+            },
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "REAL_ANSWER"}]}},
+        ],
+    )
+
+    turn = capture.extract_last_turn(path, "claude")
+
+    assert turn.text == (
+        "=== Transcript of a conversation between User and Claude Code ===\n"
+        "[User]: REAL_QUESTION\n"
+        "[Claude Code]: REAL_ANSWER"
+    )
+    assert turn.turn_uuid == "u-1"
 
 
 def test_claude_explicit_session_id_wins(tmp_path):
