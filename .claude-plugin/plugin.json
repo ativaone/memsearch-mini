@@ -1,6 +1,6 @@
 {
   "name": "memsearch-mini",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Persistent memory for Claude Code — markdown journals indexed in a local SQLite database",
   "author": {
     "name": "ativaone"
