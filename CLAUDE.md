@@ -69,4 +69,5 @@ search → expand → transcript. Runtime state lives under `$MEMSEARCH_MINI_HOM
 - **"Pode dar push" authorizes the whole delivery cycle.** When Edgar authorizes a push after bug
   fixes, improvements or evolutions, that covers — without asking again — one GitHub issue per item
   (symptom, root cause, fix, tests), the version bump, staging exactly what gets committed, the
-  push, and closing each issue with a comment naming the commit.
+  push, and closing each issue with a comment naming the commit. Commit messages follow
+  CONTRIBUTING.md (Conventional Commit prefixes, subject + at most one body line).
