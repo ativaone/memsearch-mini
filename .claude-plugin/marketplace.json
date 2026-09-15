@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "Persistent memory plugins for Claude Code and Codex",
-    "version": "0.1.3"
+    "version": "0.1.4"
   },
   "plugins": [
     {
       "name": "memsearch-mini",
       "source": "./",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "description": "Persistent memory for Claude Code — markdown journals indexed in a local SQLite database",
       "category": "productivity",
       "author": {
