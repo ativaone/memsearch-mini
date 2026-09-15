@@ -623,6 +623,27 @@ def test_extras_args_adds_the_configured_provider(plugin: Plugin, provider: str)
     assert result.stdout.strip() == f"--extra onnx --extra {provider}"
 
 
+@pytest.mark.parametrize(
+    ("toml", "expected"),
+    [
+        ('[summarize]\nprovider = "anthropic"\n\n[embedding]\nprovider = "openai"\n', "--extra onnx --extra openai"),
+        ('[embedding]\nprovider = "voyage"\n\n[summarize]\nprovider = "openai"\n', "--extra onnx --extra voyage"),
+        ('[summarize]\nmode = "api"\nprovider = "openai"\n', "--extra onnx"),
+        (
+            '[summarize]\nprovider = "google"\n\n[embedding]\nmodel = ""\n\n[chunking]\nprovider = "jina"\n',
+            "--extra onnx",
+        ),
+    ],
+)
+def test_extras_args_reads_only_the_embedding_section(plugin: Plugin, toml: str, expected: str) -> None:
+    """[summarize] carries a provider key of its own; it must never pick an extra."""
+    Path(plugin.env["MEMSEARCH_MINI_CONFIG"]).write_text(toml, encoding="utf-8")
+
+    result = plugin.bash("extras_args")
+
+    assert result.stdout.strip() == expected
+
+
 @pytest.mark.parametrize("value", ['"onnx"', '"nonsense"', "'openai'", "openai"])
 def test_extras_args_handles_quotes_and_unknown_providers(plugin: Plugin, value: str) -> None:
     Path(plugin.env["MEMSEARCH_MINI_CONFIG"]).write_text(f"[embedding]\nprovider = {value}\n", encoding="utf-8")

@@ -81,11 +81,13 @@ hook_guard() {
 }
 
 # Always `--extra onnx`, plus the configured embedding provider. Read with sed
-# (no Python): this runs before the runtime exists.
+# (no Python): this runs before the runtime exists. Only the `[embedding]` section
+# is scanned — `[summarize]` has a `provider` key of its own that needs no extra.
 extras_args() {
   local cfg="${MEMSEARCH_MINI_CONFIG:-$MEMSEARCH_MINI_HOME/config.toml}" provider=""
+  local section="/^[[:space:]]*\[embedding\][[:space:]]*\$/,/^[[:space:]]*\[/"
   local re="s/^[[:space:]]*provider[[:space:]]*=[[:space:]]*[\"']\{0,1\}\([A-Za-z0-9_-]*\).*/\1/p"
-  [ -r "$cfg" ] && provider="$(sed -n "$re" "$cfg" 2>/dev/null | head -n 1)"
+  [ -r "$cfg" ] && provider="$(sed -n "${section}{${re};}" "$cfg" 2>/dev/null | head -n 1)"
   printf '%s' '--extra onnx'
   case "$provider" in
     openai|google|voyage|jina|mistral|ollama|local) printf ' --extra %s' "$provider" ;;
