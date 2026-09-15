@@ -18,8 +18,10 @@ from memsearch_mini.config import (
     load,
     load_raw,
     missing_api_key,
+    resolved_summarize_api,
     save,
     set_value,
+    summarize_problem,
     to_dict,
 )
 
@@ -58,6 +60,8 @@ def test_defaults_match_the_documented_configuration():
     assert (cfg.chunking.max_chunk_size, cfg.chunking.overlap_lines, cfg.chunking.min_chunk_size) == (1500, 2, 0)
     assert (cfg.claude.summarize_enabled, cfg.claude.summarize_model) == (True, "haiku")
     assert (cfg.codex.summarize_enabled, cfg.codex.summarize_model) == (True, "gpt-5.1-codex-mini")
+    assert (cfg.summarize.mode, cfg.summarize.provider, cfg.summarize.model) == ("harness", "openai", "")
+    assert (cfg.summarize.api_key, cfg.summarize.base_url, cfg.summarize.language) == ("", "", "")
     assert cfg.prompts.summarize == ""
     assert cfg.memory.filename_suffix == ""
 
@@ -68,6 +72,28 @@ def test_filename_suffix_accepts_only_documented_choices(tmp_path):
     assert set_value("memory.filename_suffix", "", path) == ""
     with pytest.raises(ValueError):
         set_value("memory.filename_suffix", "project", path)
+
+
+def test_summarize_mode_accepts_only_documented_choices(tmp_path):
+    path = tmp_path / "c.toml"
+    assert set_value("summarize.mode", "api", path) == "api"
+    assert set_value("summarize.mode", "harness", path) == "harness"
+    with pytest.raises(ValueError, match="Expected one of"):
+        set_value("summarize.mode", "foo", path)
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "google"])
+def test_summarize_provider_accepts_the_three_vendors(tmp_path, provider):
+    assert set_value("summarize.provider", provider, tmp_path / "c.toml") == provider
+
+
+def test_summarize_provider_rejects_anything_else_but_embedding_provider_stays_open(tmp_path):
+    """Only ``[summarize]`` speaks the vendor's HTTP API itself, so only it has a closed list."""
+    path = tmp_path / "c.toml"
+    with pytest.raises(ValueError, match="Expected one of"):
+        set_value("summarize.provider", "foo", path)
+
+    assert set_value("embedding.provider", "something-new", path) == "something-new"
 
 
 def test_load_returns_defaults_when_no_file_exists(tmp_path):
@@ -284,11 +310,90 @@ def test_missing_api_key_only_reports_providers_that_need_one(monkeypatch):
     assert missing_api_key(cfg) == ""
 
 
+def _api_config() -> Config:
+    cfg = Config()
+    cfg.summarize.mode = "api"
+    cfg.summarize.model = "gpt-5-mini"
+    return cfg
+
+
+def test_summarize_problem_is_silent_in_harness_mode(monkeypatch):
+    """Harness mode ignores every api field, so nothing about them can be a problem."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg = Config()
+    cfg.summarize.provider = "nonsense"
+
+    assert summarize_problem(cfg) == ""
+
+
+def test_summarize_problem_reports_provider_then_model_then_key(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg = _api_config()
+    cfg.summarize.provider = "ollama"
+    cfg.summarize.model = ""
+    assert summarize_problem(cfg) == "summarize.provider 'ollama' unknown"
+
+    cfg.summarize.provider = "openai"
+    assert summarize_problem(cfg) == "summarize.model not set"
+
+    cfg.summarize.model = "gpt-5-mini"
+    assert summarize_problem(cfg) == "OPENAI_API_KEY not set"
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "google"])
+def test_summarize_problem_accepts_a_literal_key_or_the_environment(monkeypatch, provider):
+    variable = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "google": "GOOGLE_API_KEY"}[provider]
+    monkeypatch.delenv(variable, raising=False)
+    cfg = _api_config()
+    cfg.summarize.provider = provider
+    assert summarize_problem(cfg) == f"{variable} not set"
+
+    cfg.summarize.api_key = "literal-key"
+    assert summarize_problem(cfg) == ""
+
+    cfg.summarize.api_key = ""
+    monkeypatch.setenv(variable, "env-key")
+    assert summarize_problem(cfg) == ""
+
+
+def test_resolved_summarize_api_prefers_the_environment_key(monkeypatch):
+    cfg = _api_config()
+    cfg.summarize.api_key = "literal-key"
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    assert resolved_summarize_api(cfg) == ("literal-key", "https://api.openai.com/v1")
+
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    assert resolved_summarize_api(cfg)[0] == "env-key"
+
+
+def test_resolved_summarize_api_base_url_precedence(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://gateway.internal/v1")
+    cfg = _api_config()
+    assert resolved_summarize_api(cfg)[1] == "http://gateway.internal/v1"
+
+    cfg.summarize.base_url = "http://literal.internal/v1"
+    assert resolved_summarize_api(cfg)[1] == "http://literal.internal/v1"
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [("anthropic", "https://api.anthropic.com"), ("google", "https://generativelanguage.googleapis.com")],
+)
+def test_resolved_summarize_api_ignores_openai_base_url_for_other_vendors(monkeypatch, provider, expected):
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://gateway.internal/v1")
+    cfg = _api_config()
+    cfg.summarize.provider = provider
+
+    assert resolved_summarize_api(cfg)[1] == expected
+
+
 def test_to_dict_is_a_plain_nested_mapping():
     data = to_dict(Config())
     assert data["embedding"]["provider"] == "onnx"
     assert data["claude"] == {"summarize_enabled": True, "summarize_model": "haiku"}
-    assert set(data) == {"embedding", "chunking", "claude", "codex", "prompts", "memory"}
+    assert set(data) == {"embedding", "chunking", "claude", "codex", "summarize", "prompts", "memory"}
 
 
 def test_the_module_exposes_no_legacy_milvus_settings():

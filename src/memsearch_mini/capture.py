@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from . import config
 from .transcript import strip_harness_tags
 
 # What the upstream parsers print instead of a transcript. Never summarized.
@@ -29,10 +30,22 @@ _HEADER = "=== Transcript of a conversation between User and {} ==="
 _FINAL_HEADER = "=== Final exchange, authoritative for outcome ==="
 _EXTRA_HEADER = "=== Additional conversation context ==="
 _BULLET_LINE = re.compile(r"^\s*[-*\u2022]\s", re.MULTILINE)
+# The summarizer's budget per host, in seconds, shared by the CLI path and the api path: Claude's
+# Stop hook is capped at 120 s in hooks.json, so 110 still leaves time to write the journal.
+_TIMEOUTS = {"claude": 110, "codex": 30}
+LANGUAGE_PLACEHOLDER = "{{LANGUAGE_RULE}}"
+LANGUAGE_RULE_FOLLOW_USER = (
+    "Mandatory language rule: write every bullet in the same primary language as the [User] text. "
+    "If User mixes languages, use the dominant user-facing language."
+)
+LANGUAGE_RULE_FIXED = (
+    "Mandatory language rule: write every bullet in {language}, even when the transcript is in "
+    "another language. Keep file names, commands, code identifiers and technical terms exactly "
+    "as they appear."
+)
 FALLBACK_PROMPT = (
     "You are a third-person note-taker. Summarize the transcript as 2-10 bullet points. "
-    "Write in third person. Mandatory language rule: write every bullet in the same primary "
-    "language as the [User] text. If User mixes languages, use the dominant user-facing language. "
+    "Write in third person. {{LANGUAGE_RULE}} "
     "Do NOT answer User's question. Output ONLY bullet points."
 )
 
@@ -288,6 +301,24 @@ def _summarizer_command(platform: str, model: str, prompt: str, text: str) -> tu
     return argv, f"{prompt}\n\nTranscript:\n{text}".encode(), {"MEMSEARCH_MINI_DISABLE": "1", "CLAUDECODE": ""}
 
 
+def summarize_timeout(platform: str) -> float:
+    """Seconds the summarizer gets, whichever path runs it."""
+    return _TIMEOUTS.get(platform, _TIMEOUTS["claude"])
+
+
+def output_problem(summary: str) -> str:
+    """Reason a summarizer's output cannot be journaled, or "" when it carries bullets.
+
+    The prompt contracts bullet points only. A rate-limit notice or a refusal can come back as
+    plain prose with a perfectly successful exit; that must never be written down as a summary.
+    """
+    if not summary:
+        return "summarizer returned empty output"
+    if not _BULLET_LINE.search(summary):
+        return "summarizer returned no bullet points"
+    return ""
+
+
 def summarize(
     text: str,
     *,
@@ -300,7 +331,7 @@ def summarize(
     """Return ``(summary, failure_reason)``; exactly one is non-empty. Never raises."""
     argv, payload, extra_env = _summarizer_command(platform, model, prompt, text)
     if timeout is None:
-        timeout = 30 if platform == "codex" else 110
+        timeout = summarize_timeout(platform)
     try:
         proc = subprocess.run(
             argv,
@@ -317,13 +348,48 @@ def summarize(
     if proc.returncode != 0:
         return "", f"summarizer exited with status {proc.returncode}"
     summary = proc.stdout.decode("utf-8", errors="replace").strip()
-    if not summary:
-        return "", "summarizer returned empty output"
-    # The prompt contracts bullet points only. A rate-limit notice or a refusal can come back
-    # with exit 0 as plain prose; that must never be written down as the turn's summary.
-    if not _BULLET_LINE.search(summary):
-        return "", "summarizer returned no bullet points"
-    return summary, ""
+    problem = output_problem(summary)
+    return ("", problem) if problem else (summary, "")
+
+
+def summarize_turn(
+    cfg,
+    platform: str,
+    text: str,
+    *,
+    prompt: str,
+    cwd: str | os.PathLike[str] | None = None,
+) -> tuple[str, str]:
+    """Summarize one turn through whatever ``[summarize] mode`` selects. Never raises.
+
+    ``harness`` runs the host CLI exactly as it always has; ``api`` posts to the vendor over
+    HTTPS. A misconfigured api setup is just another failure reason, so the turn still reaches
+    the journal with its transcript anchor instead of being dropped.
+    """
+    if cfg.summarize.mode != "api":
+        return summarize(
+            text,
+            platform=platform,
+            model=cfg.agent(platform).summarize_model,
+            prompt=prompt,
+            cwd=cwd,
+        )
+    problem = config.summarize_problem(cfg)
+    if problem:
+        return "", problem
+    # Imported here so the hooks that never summarize anything do not pay for urllib.
+    from .summarizer_api import summarize_via_api
+
+    api_key, base_url = config.resolved_summarize_api(cfg)
+    return summarize_via_api(
+        text,
+        prompt=prompt,
+        provider=cfg.summarize.provider.strip(),
+        model=cfg.summarize.model.strip(),
+        api_key=api_key,
+        base_url=base_url,
+        timeout=summarize_timeout(platform),
+    )
 
 
 def mechanical_summary(user_question: str, last_message: str, content: str) -> str:
@@ -343,8 +409,18 @@ def unavailable_line(reason: str) -> str:
     )
 
 
+def language_rule(cfg) -> str:
+    """The sentence ``{{LANGUAGE_RULE}}`` stands for: follow the user, or the pinned language."""
+    language = (cfg.summarize.language or "").strip()
+    return LANGUAGE_RULE_FIXED.format(language=language) if language else LANGUAGE_RULE_FOLLOW_USER
+
+
 def load_prompt(cfg, platform: str, project_dir: str | os.PathLike[str] | None = None) -> str:
-    """Custom template (config) > ``$MEMSEARCH_MINI_PLUGIN_ROOT/prompts/summarize.txt`` > built-in."""
+    """Custom template (config) > ``$MEMSEARCH_MINI_PLUGIN_ROOT/prompts/summarize.txt`` > built-in.
+
+    ``{{AGENT_NAME}}`` and ``{{LANGUAGE_RULE}}`` are substituted; a custom template that carries
+    neither placeholder is used exactly as written.
+    """
     text = ""
     custom = (getattr(cfg.prompts, "summarize", "") or "").strip()
     if custom:
@@ -355,7 +431,8 @@ def load_prompt(cfg, platform: str, project_dir: str | os.PathLike[str] | None =
     root = os.environ.get("MEMSEARCH_MINI_PLUGIN_ROOT", "")
     if not text and root:
         text = _read_text(Path(root) / "prompts" / "summarize.txt")
-    return (text or FALLBACK_PROMPT).rstrip().replace("{{AGENT_NAME}}", AGENT_NAMES.get(platform, platform))
+    template = (text or FALLBACK_PROMPT).rstrip().replace("{{AGENT_NAME}}", AGENT_NAMES.get(platform, platform))
+    return template.replace(LANGUAGE_PLACEHOLDER, language_rule(cfg))
 
 
 def journal_suffix(cfg) -> str:

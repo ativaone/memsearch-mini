@@ -267,6 +267,9 @@ def test_summarize_prompt_template_ships_with_the_plugin() -> None:
     template = (REPO / "prompts" / "summarize.txt").read_text(encoding="utf-8")
 
     assert "{{AGENT_NAME}}" in template
+    # The language rule is substituted, never spelled out: [summarize] language pins it.
+    assert "{{LANGUAGE_RULE}}" in template
+    assert "Mandatory language rule" not in template
 
 
 def test_installer_points_at_the_uninstaller() -> None:

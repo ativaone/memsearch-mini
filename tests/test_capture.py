@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from memsearch_mini import capture, config
+from memsearch_mini import capture, config, summarizer_api
 
 NOW = datetime(2026, 7, 23, 12, 34, 56)
 
@@ -547,7 +547,8 @@ def test_load_prompt_precedence(tmp_path, monkeypatch):
     (project / "custom.txt").write_text("CUSTOM {{AGENT_NAME}} template\n", encoding="utf-8")
     cfg = config.Config()
 
-    assert capture.load_prompt(cfg, "claude", project) == capture.FALLBACK_PROMPT
+    fallback = capture.FALLBACK_PROMPT.replace(capture.LANGUAGE_PLACEHOLDER, capture.LANGUAGE_RULE_FOLLOW_USER)
+    assert capture.load_prompt(cfg, "claude", project) == fallback
 
     monkeypatch.setenv("MEMSEARCH_MINI_PLUGIN_ROOT", str(plugin_root))
     assert capture.load_prompt(cfg, "claude", project) == "PLUGIN Claude Code template"
@@ -570,7 +571,110 @@ def test_load_prompt_uses_the_repository_template(tmp_path, monkeypatch):
 
     assert prompt.startswith("You are a third-person note-taker.")
     assert "{{AGENT_NAME}}" not in prompt
+    assert capture.LANGUAGE_PLACEHOLDER not in prompt
     assert "Codex" in prompt
+
+
+# --- the language rule -------------------------------------------------------
+
+
+def test_load_prompt_follows_the_user_language_by_default(tmp_path):
+    prompt = capture.load_prompt(config.Config(), "claude", tmp_path)
+
+    assert capture.LANGUAGE_RULE_FOLLOW_USER in prompt
+    assert capture.LANGUAGE_PLACEHOLDER not in prompt
+
+
+def test_load_prompt_pins_the_configured_language(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMSEARCH_MINI_PLUGIN_ROOT", str(Path(__file__).resolve().parent.parent))
+    cfg = config.Config()
+    cfg.summarize.language = " pt-BR "  # stored by hand, so it may carry whitespace
+
+    prompt = capture.load_prompt(cfg, "claude", tmp_path)
+
+    assert "write every bullet in pt-BR, even when the transcript is in another language" in prompt
+    assert capture.LANGUAGE_RULE_FOLLOW_USER not in prompt
+    assert capture.LANGUAGE_PLACEHOLDER not in prompt
+
+
+def test_load_prompt_leaves_a_custom_template_without_the_placeholder_alone(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "own.txt").write_text("OWN {{AGENT_NAME}} template\n", encoding="utf-8")
+    cfg = config.Config()
+    cfg.prompts.summarize = "own.txt"
+    cfg.summarize.language = "pt-BR"
+
+    assert capture.load_prompt(cfg, "claude", project) == "OWN Claude Code template"
+
+
+# --- summarize_turn: the configured summarizer -------------------------------
+
+
+def test_summarize_turn_harness_mode_runs_the_host_cli_unchanged(tmp_path, monkeypatch):
+    _claude_recorder(tmp_path, monkeypatch, safe_mode=True)
+
+    summary, reason = capture.summarize_turn(
+        config.Config(), "claude", "TRANSCRIPT_BODY", prompt="PROMPT_BODY", cwd=tmp_path
+    )
+
+    assert reason == ""
+    assert summary == "- User asked about the hook.\n- Claude Code explained it."
+    assert _argv(tmp_path) == [
+        "-p",
+        "--safe-mode",
+        "--strict-mcp-config",
+        "--tools",
+        "",
+        "--model",
+        "haiku",
+        "--no-session-persistence",
+        "--no-chrome",
+    ]
+    assert _log(tmp_path, "stdin.txt") == "PROMPT_BODY\n\nTranscript:\nTRANSCRIPT_BODY"
+
+
+def test_summarize_turn_api_mode_reports_a_problem_without_calling_anything(tmp_path, monkeypatch):
+    """A misconfigured api setup must cost nothing: no subprocess, no request."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    def _never(*args, **kwargs):
+        raise AssertionError("no summarizer may run")
+
+    monkeypatch.setattr(capture, "summarize", _never)
+    monkeypatch.setattr(summarizer_api, "summarize_via_api", _never)
+    cfg = config.Config()
+    cfg.summarize.mode = "api"
+
+    assert capture.summarize_turn(cfg, "claude", "T", prompt="P", cwd=tmp_path) == ("", "summarize.model not set")
+
+
+@pytest.mark.parametrize(("platform", "timeout"), [("claude", 110), ("codex", 30)])
+def test_summarize_turn_api_mode_passes_the_resolved_endpoint(tmp_path, monkeypatch, platform, timeout):
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        summarizer_api,
+        "summarize_via_api",
+        lambda text, **kwargs: (calls.append({"text": text, **kwargs}), ("- Bullet.", ""))[1],
+    )
+    cfg = config.Config()
+    cfg.summarize.mode = "api"
+    cfg.summarize.model = " gpt-5-mini "
+    cfg.summarize.api_key = "literal-key"
+
+    assert capture.summarize_turn(cfg, platform, "T", prompt="P", cwd=tmp_path) == ("- Bullet.", "")
+    assert calls == [
+        {
+            "text": "T",
+            "prompt": "P",
+            "provider": "openai",
+            "model": "gpt-5-mini",
+            "api_key": "env-key",  # the environment wins over the literal
+            "base_url": "https://api.openai.com/v1",
+            "timeout": timeout,
+        }
+    ]
 
 
 # --- journal -----------------------------------------------------------------

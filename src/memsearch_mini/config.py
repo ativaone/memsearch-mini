@@ -30,6 +30,18 @@ _API_KEY_ENV = {
     "mistral": "MISTRAL_API_KEY",
 }
 
+# The summarizer's own providers: a closed set, because the plugin speaks their HTTP API itself.
+_SUMMARIZE_KEY_ENV = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "google": "GOOGLE_API_KEY",
+}
+_SUMMARIZE_BASE_URL = {
+    "openai": "https://api.openai.com/v1",
+    "anthropic": "https://api.anthropic.com",
+    "google": "https://generativelanguage.googleapis.com",
+}
+
 
 def home_dir() -> Path:
     """Everything the plugin writes outside a project lives here (default ~/.memsearch-mini).
@@ -72,6 +84,23 @@ class AgentConfig:
 
 
 @dataclass
+class SummarizeConfig:
+    """How a turn is summarized, whichever host recorded it.
+
+    ``harness`` (the default) runs the agent CLI that is already installed; ``api`` posts the
+    turn to the provider's HTTP endpoint instead, which is the only way to summarize with a
+    model the host cannot reach.
+    """
+
+    mode: str = "harness"  # harness | api
+    provider: str = "openai"  # api mode only: openai | anthropic | google
+    model: str = ""  # required in api mode; there is no sensible default across three vendors
+    api_key: str = ""  # optional literal; a real environment variable always wins
+    base_url: str = ""  # "" means the provider's public endpoint
+    language: str = ""  # "" follows the user's own language; e.g. "pt-BR"
+
+
+@dataclass
 class PromptsConfig:
     summarize: str = ""
 
@@ -87,6 +116,7 @@ class Config:
     chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
     claude: AgentConfig = field(default_factory=lambda: AgentConfig(summarize_model="haiku"))
     codex: AgentConfig = field(default_factory=lambda: AgentConfig(summarize_model="gpt-5.1-codex-mini"))
+    summarize: SummarizeConfig = field(default_factory=SummarizeConfig)
     prompts: PromptsConfig = field(default_factory=PromptsConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
 
@@ -108,7 +138,13 @@ class Config:
 # split loop forever, and the other three are counts, so a negative value is meaningless.
 _INT_FIELDS = {"max_chunk_size": 1, "overlap_lines": 0, "min_chunk_size": 0, "batch_size": 0}
 _BOOL_FIELDS = {"summarize_enabled"}
-_CHOICE_FIELDS = {"filename_suffix": ("", "hostname")}
+# Keyed by field name, or by "section.field" when only that section's field is a closed set:
+# [embedding] provider is open (any SDK the user installed), [summarize] provider is not.
+_CHOICE_FIELDS = {
+    "filename_suffix": ("", "hostname"),
+    "summarize.mode": ("harness", "api"),
+    "summarize.provider": ("openai", "anthropic", "google"),
+}
 
 
 def load_raw(path: Path | None = None) -> dict[str, Any]:
@@ -162,7 +198,8 @@ def get_value(key: str, cfg: Config | None = None) -> Any:
     return getattr(getattr(cfg, section), name)
 
 
-def coerce(name: str, value: str) -> Any:
+def coerce(name: str, value: str, *, section: str = "") -> Any:
+    """Validate and convert one raw ``config set`` value; ``section`` narrows the choice lists."""
     if name in _INT_FIELDS:
         number, floor = int(value), _INT_FIELDS[name]
         if number < floor:
@@ -175,15 +212,16 @@ def coerce(name: str, value: str) -> Any:
         if lowered in {"0", "false", "no", "off"}:
             return False
         raise ValueError(f"Expected a boolean for {name}, got {value!r}")
-    if name in _CHOICE_FIELDS and value not in _CHOICE_FIELDS[name]:
-        raise ValueError(f"Expected one of {_CHOICE_FIELDS[name]!r} for {name}, got {value!r}")
+    choices = _CHOICE_FIELDS.get(f"{section}.{name}", _CHOICE_FIELDS.get(name))
+    if choices is not None and value not in choices:
+        raise ValueError(f"Expected one of {choices!r} for {name}, got {value!r}")
     return value
 
 
 def set_value(key: str, value: str, path: Path | None = None) -> Any:
     """Coerce, persist and return the stored value."""
     section, name = _split_key(key)
-    stored = coerce(name, value)
+    stored = coerce(name, value, section=section)
     raw = load_raw(path)
     if section in raw and not isinstance(raw[section], dict):
         raise ValueError(f"[{section}] in {path or config_path()} holds a value, not a section; "
@@ -204,3 +242,37 @@ def missing_api_key(cfg: Config) -> str:
     if not var or cfg.embedding.api_key or os.environ.get(var):
         return ""
     return var
+
+
+def summarize_problem(cfg: Config) -> str:
+    """Reason ``[summarize]`` cannot summarize anything, or "" — harness mode is always usable.
+
+    Only api mode can be misconfigured, and it is reported instead of enforced: a turn with an
+    unusable summarizer is still journaled, with this reason where the bullets would have been.
+    """
+    if cfg.summarize.mode != "api":
+        return ""
+    provider = cfg.summarize.provider.strip()
+    var = _SUMMARIZE_KEY_ENV.get(provider, "")
+    if not var:
+        return f"summarize.provider {provider!r} unknown"
+    if not cfg.summarize.model.strip():
+        return "summarize.model not set"
+    if not cfg.summarize.api_key.strip() and not os.environ.get(var):
+        return f"{var} not set"
+    return ""
+
+
+def resolved_summarize_api(cfg: Config) -> tuple[str, str]:
+    """Effective ``(api_key, base_url)`` for api mode, so no caller re-derives the precedence.
+
+    The environment wins over the literal key, as it does for embedding; ``base_url`` wins over
+    ``OPENAI_BASE_URL`` (openai only, mirroring the embedding provider) and over the default.
+    """
+    provider = cfg.summarize.provider.strip()
+    var = _SUMMARIZE_KEY_ENV.get(provider, "")
+    api_key = (os.environ.get(var, "") if var else "") or cfg.summarize.api_key.strip()
+    base_url = cfg.summarize.base_url.strip()
+    if not base_url and provider == "openai":
+        base_url = os.environ.get("OPENAI_BASE_URL", "").strip()
+    return api_key, base_url or _SUMMARIZE_BASE_URL.get(provider, "")

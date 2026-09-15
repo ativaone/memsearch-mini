@@ -38,6 +38,7 @@ _H34 = re.compile(r"^#{3,4}\s")
 _BULLET = re.compile(r"^-\s")
 _KEY_TIP = "Tip: memsearch-mini config set embedding.provider onnx"
 _ONNX_TIP = "Tip: uv sync --extra onnx"
+_SUMMARIZE_TIP = "Tip: memsearch-mini config set summarize.mode harness"
 
 
 def _as_dict(data: bytes | str) -> dict | None:
@@ -368,6 +369,18 @@ def _provider_problem(cfg) -> str:
     return ""
 
 
+def _summarize_warning(cfg) -> str:
+    """Status suffix when ``[summarize] mode = "api"`` is set but cannot run.
+
+    A warning, not an error: search and indexing are unaffected, and every turn is still
+    journaled — only without its bullets. Reported once per session, where it is read.
+    """
+    problem = config.summarize_problem(cfg)
+    if not problem:
+        return ""
+    return f" | WARNING: {problem} — turns recorded without summaries | {_SUMMARIZE_TIP}"
+
+
 def _preview_sections(path: Path, max_lines: int) -> list[str]:
     """Session sections that carry at least one bullet, newest ``max_lines`` kept."""
     try:
@@ -519,7 +532,7 @@ def session_start(platform: str) -> None:
         _emit({"systemMessage": status + problem})
         return
     index_status, stale = _index_state(memsearch_mini_dir(project_dir) / "index.db", memory)
-    status += f" | index: {index_status} | memory: {memory}"
+    status += f" | index: {index_status} | memory: {memory}" + _summarize_warning(cfg)
     if stale:
         _spawn_detached(_index_argv(memory), project_dir, _reindex_env())
     try:
@@ -538,10 +551,10 @@ def session_start(platform: str) -> None:
 
 def _summarize_and_append(cfg, platform: str, turn, memory: Path, project_dir: Path, now=None) -> str:
     """Journal the turn; returns the summarizer's failure reason, or "" when it produced bullets."""
-    summary, reason = capture.summarize(
+    summary, reason = capture.summarize_turn(
+        cfg,
+        platform,
         turn.text,
-        platform=platform,
-        model=cfg.agent(platform).summarize_model,
         prompt=capture.load_prompt(cfg, platform, project_dir),
         cwd=project_dir,
     )

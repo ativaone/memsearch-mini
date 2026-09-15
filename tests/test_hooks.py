@@ -12,7 +12,9 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
@@ -598,6 +600,84 @@ def test_claude_stop_never_journals_a_rate_limit_notice(project, spawns, tmp_pat
     text = next(iter(_memory(project).glob("*.md"))).read_text(encoding="utf-8")
     assert "- Memory summary unavailable: summarizer returned no bullet points;" in text
     assert "hit your limit" not in text
+
+
+def _api_stub(status: int = 200, body: dict | None = None) -> tuple[str, HTTPServer]:
+    """A one-endpoint OpenAI-shaped stub on 127.0.0.1; the caller shuts it down."""
+    payload = json.dumps(body or {"choices": [{"message": {"content": "- The API summarized it."}}]}).encode()
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.0"
+
+        def do_POST(self) -> None:  # BaseHTTPRequestHandler dispatches on the method name
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args) -> None:
+            """Silence the default stderr access log."""
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{server.server_port}", server
+
+
+def _write_summarize_config(*, model: str = "gpt-5-mini", base_url: str = "") -> None:
+    config.config_path().write_text(
+        "[summarize]\n"
+        'mode = "api"\n'
+        'provider = "openai"\n'
+        f'model = "{model}"\n'
+        'api_key = "literal-key"\n'
+        f'base_url = "{base_url}"\n',
+        encoding="utf-8",
+    )
+
+
+def test_claude_stop_summarizes_through_the_vendor_api(project, spawns, tmp_path):
+    _fake_bin(tmp_path, "claude", 'echo called >> "$HOME/claude.calls"\necho "- The CLI summarized it."\n')
+    base_url, server = _api_stub()
+    try:
+        _write_summarize_config(base_url=base_url)
+        transcript = _claude_transcript(tmp_path / "session-a.jsonl")
+
+        payload = _json(_invoke(["stop", "--platform", "claude"], {"transcript_path": str(transcript)}))
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert payload == {"systemMessage": "[memsearch-mini] turn captured"}
+    text = next(iter(_memory(project).glob("*.md"))).read_text(encoding="utf-8")
+    assert text.endswith("- The API summarized it.\n\n")
+    assert not (tmp_path / "home" / "claude.calls").exists()  # the host CLI is never started
+
+
+def test_claude_stop_journals_a_misconfigured_api_with_the_anchor(project, spawns, tmp_path):
+    _write_summarize_config(model="")
+    transcript = _claude_transcript(tmp_path / "session-a.jsonl", uuid="turn-a")
+
+    payload = _json(_invoke(["stop", "--platform", "claude"], {"transcript_path": str(transcript)}))
+
+    assert payload == {"systemMessage": "[memsearch-mini] turn recorded without a summary (summarize.model not set)"}
+    text = next(iter(_memory(project).glob("*.md"))).read_text(encoding="utf-8")
+    assert "- Memory summary unavailable: summarize.model not set;" in text
+    assert f"<!-- session:session-a turn:turn-a transcript:{transcript} -->" in text
+    assert "Summarize this session" not in text  # never persist raw transcript text
+
+
+def test_session_start_warns_about_an_unusable_api_summarizer(project, spawns):
+    config.config_path().write_text('[summarize]\nmode = "api"\nmodel = "gpt-5-mini"\n', encoding="utf-8")
+
+    message = _json(_invoke(["session-start", "--platform", "claude"]))["systemMessage"]
+
+    assert "WARNING: OPENAI_API_KEY not set — turns recorded without summaries" in message
+    assert "Tip: memsearch-mini config set summarize.mode harness" in message
+    assert "ERROR" not in message  # embedding still works: search and indexing are untouched
+    assert "embedding: onnx/gpahal/bge-m3-onnx-int8" in message
+    assert f"memory: {_memory(project)}" in message
 
 
 def test_recent_memory_includes_suffixed_journals(project, spawns):

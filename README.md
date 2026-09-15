@@ -47,7 +47,8 @@ markdown, indexes it locally, and hands the relevant parts back the next time th
 - **One SQLite index per project**, holding chunks, embeddings and an FTS5 keyword index. It is
   derived: delete it and the next index run rebuilds it from the markdown.
 - **Nothing leaves the machine** with the default `onnx` provider: embeddings are computed locally by
-  onnxruntime. Only the summarizer talks to a network, and that is the agent CLI you already run.
+  onnxruntime. Only the summarizer talks to a network: the agent CLI you already run, or — with
+  `[summarize] mode = "api"` — the vendor endpoint you configured for it.
 
 ## Requirements
 
@@ -57,7 +58,8 @@ markdown, indexes it locally, and hands the relevant parts back the next time th
   interpreter.
 - **`git`** — the project root is `git rev-parse --show-toplevel` when the working directory is in a
   repository.
-- **`claude` and/or `codex`** — whichever host you use also does the summarizing.
+- **`claude` and/or `codex`** — whichever host you use also does the summarizing, unless
+  `[summarize] mode = "api"` sends the turn to a vendor API instead.
 - **Disk** — the first index downloads the ONNX embedding model (`gpahal/bge-m3-onnx-int8`, several
   hundred MB) into `~/.memsearch-mini/models/`, plus roughly 90 MB of wheels in the runtime environment
   under `~/.memsearch-mini/venvs/`.
@@ -275,8 +277,16 @@ summarize_model = "haiku"   # passed to `claude -p --model`
 summarize_enabled = true
 summarize_model = "gpt-5.1-codex-mini"   # passed to `codex exec -m`
 
+[summarize]
+mode = "harness"      # harness runs the agent CLI you already have; api calls the vendor over HTTPS
+provider = "openai"   # api mode only: openai | anthropic | google
+model = ""            # api mode only, and required there: there is no default across three vendors
+api_key = ""          # optional literal; a real environment variable always wins
+base_url = ""         # "" means the provider's public endpoint
+language = ""         # "" follows the user's own language; "pt-BR" pins every bullet to it
+
 [prompts]
-summarize = ""        # path to a custom template; {{AGENT_NAME}} is substituted
+summarize = ""        # path to a custom template; {{AGENT_NAME}} and {{LANGUAGE_RULE}} are substituted
 
 [memory]
 filename_suffix = ""  # "hostname" writes YYYY-MM-DD-<host>.md, for a memory folder synced between machines
@@ -294,6 +304,38 @@ bin/memsearch-mini config set claude.summarize_model sonnet
 ```
 
 Unknown keys are rejected; `int` and `bool` values are coerced and validated on the way in.
+
+## Summarizer
+
+Every turn is rewritten as third-person bullets before it is journaled. `mode = "harness"` — the
+default — runs the CLI you already have, `claude -p` or `codex exec`, on the plan you already pay
+for. `mode = "api"` posts the turn to the vendor's own endpoint over HTTPS instead, with nothing but
+the Python standard library: no SDK, no extra to install, no runtime resync.
+
+| Provider | API key | Endpoint |
+|---|---|---|
+| `openai` | `OPENAI_API_KEY` | `https://api.openai.com/v1` + `/chat/completions` |
+| `anthropic` | `ANTHROPIC_API_KEY` | `https://api.anthropic.com` + `/v1/messages` |
+| `google` | `GOOGLE_API_KEY` | `https://generativelanguage.googleapis.com` + `/v1beta/models/<model>:generateContent` |
+
+`summarize.base_url` replaces that root, which is how an OpenAI-compatible gateway is reached
+(`OPENAI_BASE_URL` is honoured for `openai` too). `summarize.api_key` is an alternative to exporting
+the variable, and the variable wins. `summarize.model` has no default: api mode needs one.
+
+```bash
+bin/memsearch-mini config set summarize.mode api
+bin/memsearch-mini config set summarize.model gpt-5-mini
+```
+
+A setup that cannot run is reported once per session on the SessionStart line (`WARNING:
+summarize.model not set — turns recorded without summaries`), and no turn is ever dropped over it:
+each one is journaled as `- Memory summary unavailable: <reason>;` with its transcript anchor, so
+`memory-recall` can still drill into the original conversation.
+
+`summarize.language` pins the language of the bullets — `"pt-BR"`, `"Portuguese"`, whatever the model
+understands — while the default follows whichever language the user wrote in. Pinning is worth it
+when a project mixes two: half of hybrid search is the FTS5 keyword index, which matches words
+literally, so one language per journal is what makes a query in that language find its own turns.
 
 ## Embedding providers
 
@@ -384,7 +426,7 @@ once each layer knows about `$MEMSEARCH_MINI_HOME`.
 
 | Code path | Runs | Writes | Network |
 |---|---|---|---|
-| Hooks and the children they detach (`uv sync`, the indexer, `claude -p`) | outside the Bash sandbox, inside the wrapper | `~/.memsearch-mini`, `<project>/.memsearch-mini`, `~/.claude` (the summarizer's own state) | `claude -p` reaches the API; the first index downloads the model from `huggingface.co` |
+| Hooks and the children they detach (`uv sync`, the indexer, `claude -p`) | outside the Bash sandbox, inside the wrapper | `~/.memsearch-mini`, `<project>/.memsearch-mini`, `~/.claude` (the summarizer's own state) | `claude -p` reaches the API — in `[summarize] mode = "api"` the hook calls the vendor endpoint itself; the first index downloads the model from `huggingface.co` |
 | `memory-recall` skill (`bin/memsearch-mini search` / `expand` / `transcript`) | through the Bash tool, so inside the Bash sandbox | `~/.memsearch-mini/uv-cache` — `uv run` refuses to start when its cache is read-only, even with `--frozen --no-sync` | none once the model is cached |
 | The plugin checkout | — | nothing, ever | — |
 
