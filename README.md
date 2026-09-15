@@ -76,15 +76,17 @@ Installing registers the hooks but does not build the runtime. Quit Claude Code 
 project directory:
 
 ```bash
-~/.claude/plugins/cache/ativaone/memsearch-mini/*/bin/memsearch-mini index
+"$(ls -d ~/.claude/plugins/cache/ativaone/memsearch-mini/*/ | sort -V | tail -n 1)bin/memsearch-mini" index
 ```
 
 It installs the runtime under `~/.memsearch-mini/venvs/`, downloads the embedding model (`onnx`, the
 default) or checks the API key (cloud providers), and creates the empty index, all in the foreground.
-The `*` resolves to the installed version — the copy the hooks themselves run from, printed as
-`installPath` by `claude plugin list --json`. Runtimes are keyed by plugin path, so don't use the
-launcher in the clone under `~/.claude/plugins/marketplaces/`: it builds a second runtime the hooks
-never use, and the next session still installs the real one in the background.
+The `$(…)` picks the newest version in the cache — the copy the hooks themselves run from, printed as
+`installPath` by `claude plugin list --json`. A bare `*/` glob is not enough: the cache keeps older
+versions around for a while after each update, so `*` would expand to several launchers and the
+shell would run the oldest one with the others as its arguments. Runtimes are keyed by plugin path,
+so don't use the launcher in the clone under `~/.claude/plugins/marketplaces/`: it builds a second
+runtime the hooks never use, and the next session still installs the real one in the background.
 Want a provider other than `onnx`? Write `~/.memsearch-mini/config.toml` before this step (see
 [Configuration](#configuration)). The command resolves `.memsearch-mini` from the git root of the
 current directory, so run it inside the project. Open Claude Code again: the first line is
@@ -151,8 +153,25 @@ claude plugin update memsearch-mini@ativaone
 ```
 
 The next session syncs the new version's runtime in the background and reclaims the old one by
-itself after its grace period. Codex: `git pull` in the checkout is the whole upgrade — the hooks
-run straight from it; re-run `bash codex/install.sh` only after moving the clone.
+itself after its grace period. To have the runtime ready before that session, sync it in the
+foreground from the freshly installed copy — the same command as the install step, newest cache
+version first:
+
+```bash
+"$(ls -d ~/.claude/plugins/cache/ativaone/memsearch-mini/*/ | sort -V | tail -n 1)bin/memsearch-mini" --sync
+```
+
+Never point that at `~/.claude/plugins/marketplaces/ativaone/`: that clone is what the marketplace
+tracks, not what the hooks run, and a sync there leaves a stray runtime that the automatic sweep
+keeps for as long as the clone exists. If you already did, remove it by hand — each runtime in
+`~/.memsearch-mini/venvs/` has a `<id>.root` sidecar naming the checkout it was built for:
+
+```bash
+grep -l marketplaces ~/.memsearch-mini/venvs/*.root | sed 's/\.root$//' | xargs -I{} rm -rf {} {}.root {}.log
+```
+
+Codex: `git pull` in the checkout is the whole upgrade — the hooks run straight from it; re-run
+`bash codex/install.sh` only after moving the clone.
 
 ## How it works
 
