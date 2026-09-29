@@ -39,8 +39,8 @@ markdown, indexes it locally, and hands the relevant parts back the next time th
   recent journal entries into the conversation, and kicks off a background reindex when the index is
   missing or older than the journals.
 - **Every turn is written down.** The Stop hook extracts the last exchange, has `claude -p` (or
-  `codex exec`) rewrite it as third-person bullets, and appends it to
-  `.memsearch-mini/memory/YYYY-MM-DD.md`.
+  `codex exec`, or a vendor API with `[summarize] mode = "api"`) rewrite it as third-person bullets,
+  and appends it to `.memsearch-mini/memory/YYYY-MM-DD.md`.
 - **Recall is a skill, not an injection.** `memory-recall` runs in a forked subagent that searches,
   expands the promising hits, and can drill into the original transcript — the main conversation
   only sees the curated answer.
@@ -176,15 +176,20 @@ Codex: `git pull` in the checkout is the whole upgrade — the hooks run straigh
 ## How it works
 
 ```
-turn ends ─▶ Stop hook ─▶ parse last turn ─▶ claude -p / codex exec ─▶ bullets
-                                                                        │
-              .memsearch-mini/memory/YYYY-MM-DD.md  ◀──────────────────┘
+turn ends ─▶ Stop hook ─▶ parse last turn ─▶ summarize ─▶ bullets
+                                                            │
+              .memsearch-mini/memory/YYYY-MM-DD.md  ◀───────┘
                             │
               index (detached) ─▶ chunk ─▶ embed ─▶ .memsearch-mini/index.db
                                                           │
   question ─▶ memory-recall skill ─▶ search (dense + FTS5, fused with RRF)
                                        └─▶ expand ─▶ transcript
 ```
+
+`summarize` is whatever `[summarize] mode` selects: `harness` (the default) runs the agent CLI you
+already have, `claude -p` or `codex exec`; `api` posts the turn over HTTPS to `openai`, `anthropic`,
+`google` or `openrouter` — see [Summarizer](#summarizer). A turn that cannot be summarized is still
+journaled, with its transcript anchor in place of the bullets.
 
 ### On disk
 
