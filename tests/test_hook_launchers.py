@@ -623,6 +623,14 @@ def test_extras_args_adds_the_configured_provider(plugin: Plugin, provider: str)
     assert result.stdout.strip() == f"--extra onnx --extra {provider}"
 
 
+def test_extras_args_maps_openrouter_to_the_openai_extra(plugin: Plugin) -> None:
+    Path(plugin.env["MEMSEARCH_MINI_CONFIG"]).write_text('[embedding]\nprovider = "openrouter"\n', encoding="utf-8")
+
+    result = plugin.bash("extras_args")
+
+    assert result.stdout.strip() == "--extra onnx --extra openai"
+
+
 @pytest.mark.parametrize(
     ("toml", "expected"),
     [

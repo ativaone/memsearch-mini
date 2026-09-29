@@ -88,7 +88,7 @@ def _call(base_url: str, *, provider: str = "openai", model: str = "m-1", timeou
 
 def _prompt_and_transcript(provider: str, body: dict) -> tuple[str, str]:
     """The system prompt and the user message, wherever that vendor puts them."""
-    if provider == "openai":
+    if provider in ("openai", "openrouter"):
         assert body["model"] == "m-1"
         return body["messages"][0]["content"], body["messages"][1]["content"]
     if provider == "anthropic":
@@ -104,6 +104,7 @@ def _prompt_and_transcript(provider: str, body: dict) -> tuple[str, str]:
     ("provider", "body", "path", "header"),
     [
         ("openai", OPENAI_OK, "/chat/completions", ("authorization", "Bearer k-1")),
+        ("openrouter", OPENAI_OK, "/chat/completions", ("authorization", "Bearer k-1")),
         ("anthropic", ANTHROPIC_OK, "/v1/messages", ("x-api-key", "k-1")),
         ("google", GOOGLE_OK, "/v1beta/models/m-1:generateContent", ("x-goog-api-key", "k-1")),
     ],

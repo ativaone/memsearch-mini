@@ -277,9 +277,9 @@ directory, `MEMSEARCH_MINI_CONFIG` moves just this file. The first SessionStart 
 
 ```toml
 [embedding]
-provider = "onnx"     # onnx | openai | google | voyage | jina | mistral | ollama | local
+provider = "onnx"     # onnx | openai | openrouter | google | voyage | jina | mistral | ollama | local
 model = ""            # "" means the provider's default model
-api_key = ""          # optional literal; a real environment variable always wins
+api_key = ""          # wins over the provider's environment variable when set
 base_url = ""         # openai-compatible endpoints only
 batch_size = 0        # 0 means the provider's own default
 
@@ -298,9 +298,9 @@ summarize_model = "gpt-5.1-codex-mini"   # passed to `codex exec -m`
 
 [summarize]
 mode = "harness"      # harness runs the agent CLI you already have; api calls the vendor over HTTPS
-provider = "openai"   # api mode only: openai | anthropic | google
-model = ""            # api mode only, and required there: there is no default across three vendors
-api_key = ""          # optional literal; a real environment variable always wins
+provider = "openai"   # api mode only: openai | anthropic | google | openrouter
+model = ""            # api mode only, and required there: there is no default across vendors
+api_key = ""          # wins over the provider's environment variable when set
 base_url = ""         # "" means the provider's public endpoint
 language = ""         # "" follows the user's own language; "pt-BR" pins every bullet to it
 
@@ -336,10 +336,11 @@ the Python standard library: no SDK, no extra to install, no runtime resync.
 | `openai` | `OPENAI_API_KEY` | `https://api.openai.com/v1` + `/chat/completions` |
 | `anthropic` | `ANTHROPIC_API_KEY` | `https://api.anthropic.com` + `/v1/messages` |
 | `google` | `GOOGLE_API_KEY` | `https://generativelanguage.googleapis.com` + `/v1beta/models/<model>:generateContent` |
+| `openrouter` | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1` + `/chat/completions` — models are vendor-prefixed, e.g. `anthropic/claude-haiku-4.5` |
 
 `summarize.base_url` replaces that root, which is how an OpenAI-compatible gateway is reached
 (`OPENAI_BASE_URL` is honoured for `openai` too). `summarize.api_key` is an alternative to exporting
-the variable, and the variable wins. `summarize.model` has no default: api mode needs one.
+the variable, and it wins when both are set. `summarize.model` has no default: api mode needs one.
 
 ```bash
 bin/memsearch-mini config set summarize.mode api
@@ -362,6 +363,7 @@ literally, so one language per journal is what makes a query in that language fi
 |---|---|---|
 | `onnx` *(default)* | — | Local `gpahal/bge-m3-onnx-int8` on onnxruntime, CPU. Downloaded once into the Hugging Face cache. |
 | `openai` | `OPENAI_API_KEY` | `text-embedding-3-small`. Honours `embedding.base_url` (or `OPENAI_BASE_URL`) for compatible endpoints. |
+| `openrouter` | `OPENROUTER_API_KEY` | `openai/text-embedding-3-small` through `https://openrouter.ai/api/v1` (`embedding.base_url` overrides it). Models are vendor-prefixed. Installs the `openai` extra; never reads `OPENAI_API_KEY` or `OPENAI_BASE_URL`. |
 | `google` | `GOOGLE_API_KEY` | `gemini-embedding-001`. Set `GOOGLE_GENAI_USE_VERTEXAI=true` to authenticate through Vertex AI instead. |
 | `voyage` | `VOYAGE_API_KEY` | `voyage-3-lite`. |
 | `jina` | `JINA_API_KEY` | `jina-embeddings-v4`. |
@@ -369,8 +371,8 @@ literally, so one language per journal is what makes a query in that language fi
 | `ollama` | — | `nomic-embed-text` against a local server; address from `OLLAMA_HOST` (default `http://localhost:11434`). Dimension is auto-detected. |
 | `local` | — | sentence-transformers `all-MiniLM-L6-v2`; CUDA, MPS or CPU, auto-detected. |
 
-`embedding.api_key` is an alternative to exporting the variable; a real environment variable takes
-precedence over it.
+`embedding.api_key` is an alternative to exporting the variable, and it takes precedence over the
+variable when both are set.
 
 Each provider needs its own SDK, so `bin/memsearch-mini` reads `embedding.provider` straight out of the
 config file and passes `--extra onnx --extra <provider>` to `uv`. The runtime remembers which extras

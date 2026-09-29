@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import inspect
-import os
 from typing import Protocol, runtime_checkable
 
 
@@ -30,6 +29,7 @@ _PROVIDERS: dict[str, tuple[str, str]] = {
     "voyage": ("memsearch_mini.embeddings.voyage", "VoyageEmbedding"),
     "jina": ("memsearch_mini.embeddings.jina", "JinaEmbedding"),
     "mistral": ("memsearch_mini.embeddings.mistral", "MistralEmbedding"),
+    "openrouter": ("memsearch_mini.embeddings.openrouter", "OpenRouterEmbedding"),
     "ollama": ("memsearch_mini.embeddings.ollama", "OllamaEmbedding"),
     "local": ("memsearch_mini.embeddings.local", "LocalEmbedding"),
     "onnx": ("memsearch_mini.embeddings.onnx", "OnnxEmbedding"),
@@ -43,6 +43,7 @@ DEFAULT_MODELS: dict[str, str] = {
     "voyage": "voyage-3-lite",
     "jina": "jina-embeddings-v4",
     "mistral": "mistral-embed",
+    "openrouter": "openai/text-embedding-3-small",
     "ollama": "nomic-embed-text",
     "local": "all-MiniLM-L6-v2",
     "onnx": "gpahal/bge-m3-onnx-int8",
@@ -52,6 +53,8 @@ _INSTALL_HINTS: dict[str, str] = {
     name: f"run 'uv sync --extra {name}' in the plugin directory"
     for name in ("openai", "google", "voyage", "jina", "mistral", "ollama", "local", "onnx")
 }
+# OpenRouter is reached through the openai SDK, so it has no extra of its own.
+_INSTALL_HINTS["openrouter"] = _INSTALL_HINTS["openai"]
 
 
 def get_provider(
@@ -65,9 +68,9 @@ def get_provider(
     """Instantiate an embedding provider by name.
 
     *base_url* and *api_key* are forwarded only to the providers whose
-    constructor actually accepts them (decided by signature introspection).  When
-    a provider's SDK only reads the environment, *api_key* is placed in that
-    variable with ``setdefault``, so a real environment variable always wins.
+    constructor actually accepts them (decided by signature introspection).  Every
+    provider that needs a key accepts one, and an explicit key beats the provider's
+    environment variable, so ``embedding.api_key`` in the config file always wins.
     """
     if name not in _PROVIDERS:
         raise ValueError(f"Unknown embedding provider {name!r}. Available: {', '.join(sorted(_PROVIDERS))}")
@@ -90,15 +93,8 @@ def get_provider(
         kwargs["batch_size"] = batch_size
     if base_url and "base_url" in accepted:
         kwargs["base_url"] = base_url
-    if api_key:
-        from ..config import api_key_env_var
-
-        env_var = api_key_env_var(name)
-        if "api_key" in accepted:
-            kwargs["api_key"] = api_key
-        elif env_var:
-            # The SDK only reads the environment; a real env var still wins.
-            os.environ.setdefault(env_var, api_key)
+    if api_key and "api_key" in accepted:
+        kwargs["api_key"] = api_key
     return cls(**kwargs)
 
 

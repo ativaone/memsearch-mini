@@ -31,11 +31,15 @@ class GoogleEmbedding:
         model: str = "gemini-embedding-001",
         *,
         batch_size: int = 0,
+        api_key: str | None = None,
     ) -> None:
         from google import genai
 
         use_vertex_ai = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").strip().lower() == "true"
-        self._client = genai.Client(vertexai=use_vertex_ai)  # reads GOOGLE_API_KEY or Vertex AI env vars
+        kwargs: dict = {"vertexai": use_vertex_ai}
+        if api_key and not use_vertex_ai:  # Vertex AI authenticates with its own credentials
+            kwargs["api_key"] = api_key
+        self._client = genai.Client(**kwargs)  # otherwise reads GOOGLE_API_KEY or Vertex AI env vars
         self._model = model
         self._dimension = _detect_dimension(self._client, model)
         self._batch_size = batch_size if batch_size > 0 else self._DEFAULT_BATCH_SIZE

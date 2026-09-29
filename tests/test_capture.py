@@ -670,7 +670,7 @@ def test_summarize_turn_api_mode_passes_the_resolved_endpoint(tmp_path, monkeypa
             "prompt": "P",
             "provider": "openai",
             "model": "gpt-5-mini",
-            "api_key": "env-key",  # the environment wins over the literal
+            "api_key": "literal-key",  # the config file wins over the environment
             "base_url": "https://api.openai.com/v1",
             "timeout": timeout,
         }

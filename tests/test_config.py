@@ -82,8 +82,8 @@ def test_summarize_mode_accepts_only_documented_choices(tmp_path):
         set_value("summarize.mode", "foo", path)
 
 
-@pytest.mark.parametrize("provider", ["openai", "anthropic", "google"])
-def test_summarize_provider_accepts_the_three_vendors(tmp_path, provider):
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "google", "openrouter"])
+def test_summarize_provider_accepts_the_documented_vendors(tmp_path, provider):
     assert set_value("summarize.provider", provider, tmp_path / "c.toml") == provider
 
 
@@ -284,6 +284,7 @@ def test_agent_fills_an_empty_model_without_mutating_the_config(platform):
         ("voyage", "VOYAGE_API_KEY"),
         ("jina", "JINA_API_KEY"),
         ("mistral", "MISTRAL_API_KEY"),
+        ("openrouter", "OPENROUTER_API_KEY"),
         ("onnx", ""),
         ("ollama", ""),
         ("local", ""),
@@ -340,9 +341,14 @@ def test_summarize_problem_reports_provider_then_model_then_key(monkeypatch):
     assert summarize_problem(cfg) == "OPENAI_API_KEY not set"
 
 
-@pytest.mark.parametrize("provider", ["openai", "anthropic", "google"])
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "google", "openrouter"])
 def test_summarize_problem_accepts_a_literal_key_or_the_environment(monkeypatch, provider):
-    variable = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "google": "GOOGLE_API_KEY"}[provider]
+    variable = {
+        "openai": "OPENAI_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+        "google": "GOOGLE_API_KEY",
+        "openrouter": "OPENROUTER_API_KEY",
+    }[provider]
     monkeypatch.delenv(variable, raising=False)
     cfg = _api_config()
     cfg.summarize.provider = provider
@@ -356,15 +362,14 @@ def test_summarize_problem_accepts_a_literal_key_or_the_environment(monkeypatch,
     assert summarize_problem(cfg) == ""
 
 
-def test_resolved_summarize_api_prefers_the_environment_key(monkeypatch):
+def test_resolved_summarize_api_prefers_the_config_key(monkeypatch):
     cfg = _api_config()
-    cfg.summarize.api_key = "literal-key"
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
-    assert resolved_summarize_api(cfg) == ("literal-key", "https://api.openai.com/v1")
-
     monkeypatch.setenv("OPENAI_API_KEY", "env-key")
-    assert resolved_summarize_api(cfg)[0] == "env-key"
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    assert resolved_summarize_api(cfg) == ("env-key", "https://api.openai.com/v1")
+
+    cfg.summarize.api_key = "literal-key"
+    assert resolved_summarize_api(cfg)[0] == "literal-key"
 
 
 def test_resolved_summarize_api_base_url_precedence(monkeypatch):
@@ -379,7 +384,11 @@ def test_resolved_summarize_api_base_url_precedence(monkeypatch):
 
 @pytest.mark.parametrize(
     ("provider", "expected"),
-    [("anthropic", "https://api.anthropic.com"), ("google", "https://generativelanguage.googleapis.com")],
+    [
+        ("anthropic", "https://api.anthropic.com"),
+        ("google", "https://generativelanguage.googleapis.com"),
+        ("openrouter", "https://openrouter.ai/api/v1"),
+    ],
 )
 def test_resolved_summarize_api_ignores_openai_base_url_for_other_vendors(monkeypatch, provider, expected):
     monkeypatch.setenv("OPENAI_BASE_URL", "http://gateway.internal/v1")
@@ -387,6 +396,17 @@ def test_resolved_summarize_api_ignores_openai_base_url_for_other_vendors(monkey
     cfg.summarize.provider = provider
 
     assert resolved_summarize_api(cfg)[1] == expected
+
+
+def test_resolved_summarize_api_never_sends_an_openai_key_to_openrouter(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    cfg = _api_config()
+    cfg.summarize.provider = "openrouter"
+    assert summarize_problem(cfg) == "OPENROUTER_API_KEY not set"
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "router-key")
+    assert resolved_summarize_api(cfg) == ("router-key", "https://openrouter.ai/api/v1")
 
 
 def test_to_dict_is_a_plain_nested_mapping():

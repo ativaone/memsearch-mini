@@ -1,7 +1,7 @@
 """Configuration: a single TOML file at ~/.memsearch-mini/config.toml.
 
-There is deliberately only one layer. Provider SDKs read their own environment
-variables (OPENAI_API_KEY, ...); ``embedding.api_key`` is an optional literal.
+There is deliberately only one layer. ``embedding.api_key`` and ``summarize.api_key`` win when
+set; otherwise each provider falls back to its own environment variable (OPENAI_API_KEY, ...).
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ _API_KEY_ENV = {
     "voyage": "VOYAGE_API_KEY",
     "jina": "JINA_API_KEY",
     "mistral": "MISTRAL_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
 }
 
 # The summarizer's own providers: a closed set, because the plugin speaks their HTTP API itself.
@@ -35,11 +36,13 @@ _SUMMARIZE_KEY_ENV = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "google": "GOOGLE_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
 }
 _SUMMARIZE_BASE_URL = {
     "openai": "https://api.openai.com/v1",
     "anthropic": "https://api.anthropic.com",
     "google": "https://generativelanguage.googleapis.com",
+    "openrouter": "https://openrouter.ai/api/v1",
 }
 
 
@@ -93,9 +96,9 @@ class SummarizeConfig:
     """
 
     mode: str = "harness"  # harness | api
-    provider: str = "openai"  # api mode only: openai | anthropic | google
-    model: str = ""  # required in api mode; there is no sensible default across three vendors
-    api_key: str = ""  # optional literal; a real environment variable always wins
+    provider: str = "openai"  # api mode only: openai | anthropic | google | openrouter
+    model: str = ""  # required in api mode; there is no sensible default across vendors
+    api_key: str = ""  # wins over the provider's environment variable when set
     base_url: str = ""  # "" means the provider's public endpoint
     language: str = ""  # "" follows the user's own language; e.g. "pt-BR"
 
@@ -143,7 +146,7 @@ _BOOL_FIELDS = {"summarize_enabled"}
 _CHOICE_FIELDS = {
     "filename_suffix": ("", "hostname"),
     "summarize.mode": ("harness", "api"),
-    "summarize.provider": ("openai", "anthropic", "google"),
+    "summarize.provider": ("openai", "anthropic", "google", "openrouter"),
 }
 
 
@@ -266,12 +269,12 @@ def summarize_problem(cfg: Config) -> str:
 def resolved_summarize_api(cfg: Config) -> tuple[str, str]:
     """Effective ``(api_key, base_url)`` for api mode, so no caller re-derives the precedence.
 
-    The environment wins over the literal key, as it does for embedding; ``base_url`` wins over
+    The config file's key wins over the environment, as it does for embedding; ``base_url`` wins over
     ``OPENAI_BASE_URL`` (openai only, mirroring the embedding provider) and over the default.
     """
     provider = cfg.summarize.provider.strip()
     var = _SUMMARIZE_KEY_ENV.get(provider, "")
-    api_key = (os.environ.get(var, "") if var else "") or cfg.summarize.api_key.strip()
+    api_key = cfg.summarize.api_key.strip() or (os.environ.get(var, "") if var else "")
     base_url = cfg.summarize.base_url.strip()
     if not base_url and provider == "openai":
         base_url = os.environ.get("OPENAI_BASE_URL", "").strip()

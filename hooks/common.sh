@@ -91,6 +91,7 @@ extras_args() {
   printf '%s' '--extra onnx'
   case "$provider" in
     openai|google|voyage|jina|mistral|ollama|local) printf ' --extra %s' "$provider" ;;
+    openrouter) printf ' --extra openai' ;;  # OpenRouter speaks the OpenAI API through its SDK
   esac
   printf '\n'
   return 0

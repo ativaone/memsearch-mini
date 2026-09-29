@@ -1,7 +1,7 @@
 """The ``[summarize] mode = "api"`` summarizer: one HTTPS request, written with the stdlib.
 
 No SDK and no extra to install, so switching to it never triggers a runtime resync. The three
-request shapes are the vendors' documented chat endpoints; everything that can go wrong comes
+request shapes are the vendors' documented chat endpoints (OpenRouter speaks the OpenAI one); everything that can go wrong comes
 back as a failure reason worded exactly like the CLI path's, because the journal renders both
 through ``capture.unavailable_line``.
 """
@@ -64,6 +64,7 @@ _PROVIDERS = {
     "openai": (_openai, _openai_text),
     "anthropic": (_anthropic, _anthropic_text),
     "google": (_google, _google_text),
+    "openrouter": (_openai, _openai_text),
 }
 
 
